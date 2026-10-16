@@ -4,7 +4,7 @@ import fastifyStatic from '@fastify/static';
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { config } from './config.ts';
-import './db.ts';
+import { db } from './db.ts';
 import { authRoutes, requireLogin } from './auth.ts';
 import { ensureSession, openwa, OpenWAError } from './openwa.ts';
 import { startWorker } from './queue.ts';
@@ -73,12 +73,16 @@ await app.listen({ port: config.port, host: config.host });
 // Connect to OpenWA in the background; retry until it's up so boot order doesn't matter.
 (async function connect(attempt = 1): Promise<void> {
   try {
-    const session = await ensureSession();
-    if (session.status === 'created' || session.status === 'disconnected' || session.status === 'failed') {
-      await openwa.start().catch((err) => app.log.warn({ err: String(err) }, 'session start failed'));
+    const main = await ensureSession();
+    // Sends from before multi-number support all went from the main number.
+    db.prepare('UPDATE sends SET session_id = ? WHERE session_id IS NULL').run(main.id);
+    if (main.status === 'created' || main.status === 'disconnected' || main.status === 'failed') {
+      await openwa.start(main.id).catch((err) => app.log.warn({ err: String(err) }, 'session start failed'));
     }
-    app.log.info(`OpenWA session "${session.name}" is ${session.status}`);
-    await registerWebhook({ info: (m) => app.log.info(m), warn: (o, m) => app.log.warn(o, m) });
+    for (const session of await openwa.listSessions()) {
+      app.log.info(`OpenWA session "${session.name}" is ${session.status}`);
+      await registerWebhook(session.id, { info: (m) => app.log.info(m), warn: (o, m) => app.log.warn(o, m) });
+    }
     startWorker({ info: (o, m) => app.log.info(o, m), warn: (o, m) => app.log.warn(o, m) });
   } catch (err) {
     const delay = Math.min(attempt * 2000, 30_000);

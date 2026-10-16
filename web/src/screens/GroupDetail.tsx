@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react';
 import { api, formatPhone, renderPreview, type GroupDetail as Detail, type Member, type Template } from '../api';
+import { getSendSession, getViewSession, loadSessions, resolveSession, sessionTitle, setSendSession } from '../sessions';
 import { Button, Empty, ErrorBox, Header, Sheet, Spinner, StatusChip, toast, useLoad } from '../ui';
 
 const MAX_BATCH = 10;
@@ -13,8 +14,29 @@ export default function GroupDetail({ source, navigate }: { source: Source; navi
   const [templateId, setTemplateId] = useState<number | null>(() => Number(localStorage.getItem('lastTemplateId')) || null);
   const template = active.find((t) => t.id === templateId) ?? null;
 
+  // A group is read through the number it was opened from (home screen); a list needs no number.
+  // Either can be sent from any linked number.
+  const sessions = useLoad(loadSessions, []);
+  const [viewStored] = useState(getViewSession);
+  const viewId = resolveSession(sessions.data, viewStored)?.id ?? viewStored ?? '';
+  const [sendStored, setSendStored] = useState(() => (source.kind === 'list' ? getSendSession() ?? viewStored : viewStored));
+  const sendFrom = resolveSession(sessions.data, sendStored);
+
+  function pickSender(id: string) {
+    setSendStored(id);
+    if (source.kind === 'list') setSendSession(id);
+  }
+
   const basePath = source.kind === 'group' ? `/api/groups/${encodeURIComponent(source.id)}` : `/api/lists/${source.id}`;
-  const group = useLoad(() => api<Detail>(`${basePath}${template ? `?templateId=${template.id}` : ''}`), [basePath, template?.id]);
+  const qs = (extra: Record<string, string> = {}) => {
+    const p = new URLSearchParams({ ...(source.kind === 'group' && viewId ? { session: viewId } : {}), ...extra });
+    const str = p.toString();
+    return str ? `?${str}` : '';
+  };
+  const group = useLoad(
+    () => api<Detail>(`${basePath}${qs(template ? { templateId: String(template.id) } : {})}`),
+    [basePath, template?.id, source.kind === 'group' ? viewId : ''],
+  );
   const [menuOpen, setMenuOpen] = useState(false);
 
   async function deleteList() {
@@ -88,13 +110,13 @@ export default function GroupDetail({ source, navigate }: { source: Source; navi
   }
 
   async function send() {
-    if (!template || !group.data) return;
+    if (!template || !group.data || !sendFrom) return;
     setSending(true);
     try {
       const recipients = members.filter((m) => selected.has(m.phone)).map((m) => ({ phone: m.phone, name: m.name }));
       const res = await api<{ queued: number; skippedAlreadySent: number; skippedExcluded: number }>('/api/sends', {
         method: 'POST',
-        body: { templateId: template.id, groupId: group.data.id, groupName: group.data.name, recipients },
+        body: { templateId: template.id, sessionId: sendFrom.id, groupId: group.data.id, groupName: group.data.name, recipients },
       });
       const skipped = res.skippedAlreadySent + res.skippedExcluded;
       toast(`${res.queued} message${res.queued === 1 ? '' : 's'} queued${skipped ? `, ${skipped} skipped` : ''}. Sending slowly in the background.`);
@@ -127,10 +149,10 @@ export default function GroupDetail({ source, navigate }: { source: Source; navi
       )}
       <Sheet open={menuOpen} onClose={() => setMenuOpen(false)} title={group.data?.name ?? 'Options'}>
         <div className="space-y-2">
-          <a href={`${basePath}/export.pdf`} download onClick={() => setMenuOpen(false)} className="block rounded-xl border border-gray-200 px-4 py-3 text-sm font-semibold text-brand">
+          <a href={`${basePath}/export.pdf${qs()}`} download onClick={() => setMenuOpen(false)} className="block rounded-xl border border-gray-200 px-4 py-3 text-sm font-semibold text-brand">
             Download contacts (PDF)
           </a>
-          <a href={`${basePath}/export.csv`} download onClick={() => setMenuOpen(false)} className="block rounded-xl border border-gray-200 px-4 py-3 text-sm font-semibold text-brand">
+          <a href={`${basePath}/export.csv${qs()}`} download onClick={() => setMenuOpen(false)} className="block rounded-xl border border-gray-200 px-4 py-3 text-sm font-semibold text-brand">
             Download contacts (CSV, for uploading)
           </a>
           {source.kind === 'list' && (
@@ -156,6 +178,20 @@ export default function GroupDetail({ source, navigate }: { source: Source; navi
         </label>
         {!active.length && templates.data && (
           <button onClick={() => navigate('/templates')} className="text-sm font-semibold text-brand underline">Create your first template</button>
+        )}
+        {sessions.data && sessions.data.length > 1 && (
+          <label className="block">
+            <span className="mb-1 block text-xs font-medium text-gray-500">Send from</span>
+            <select
+              value={sendFrom?.id ?? ''}
+              onChange={(e) => pickSender(e.target.value)}
+              className="w-full rounded-xl border border-gray-200 bg-white px-3 py-2.5 text-sm outline-none focus:border-brand"
+            >
+              {sessions.data.map((s) => (
+                <option key={s.id} value={s.id}>{sessionTitle(s)}{s.status === 'ready' ? '' : ' (not connected)'}</option>
+              ))}
+            </select>
+          </label>
         )}
         {template && (
           <p className="line-clamp-2 rounded-lg bg-[#dcf8c6] px-3 py-2 text-sm text-gray-800">{renderPreview(template.body, 'Rahul', template.fallback)}</p>
@@ -225,10 +261,16 @@ export default function GroupDetail({ source, navigate }: { source: Source; navi
             </li>
           ))}
         </ul>
+        {sendFrom && (
+          <p className={`mb-2 text-sm ${sendFrom.status === 'ready' ? 'text-gray-700' : 'text-amber-800'}`}>
+            From <b>{sessionTitle(sendFrom)}</b>
+            {sendFrom.status !== 'ready' && ' — not connected right now; messages wait until it is.'}
+          </p>
+        )}
         <p className="mb-4 text-xs text-gray-500">Messages go out one by one with a random gap of about 1–2 minutes, so WhatsApp doesn't flag your number. You can close the app.</p>
         <div className="flex gap-2">
           <Button variant="ghost" className="flex-1" onClick={() => setConfirmOpen(false)}>Back</Button>
-          <Button className="flex-1" disabled={sending} onClick={send}>{sending ? 'Queueing…' : 'Send'}</Button>
+          <Button className="flex-1" disabled={sending || !sendFrom} onClick={send}>{sending ? 'Queueing…' : 'Send'}</Button>
         </div>
       </Sheet>
 

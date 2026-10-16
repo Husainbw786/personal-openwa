@@ -36,6 +36,19 @@ export interface WaStatus {
   qrCode: string | null;
 }
 
+/** One linked (or linking) WhatsApp number. */
+export interface WaSession {
+  id: string;
+  name: string;
+  label: string; // "+91…" once linked, otherwise the session name
+  isDefault: boolean;
+  status: SessionStatus;
+  phone: string | null;
+  pushName: string | null;
+  lastError: string | null;
+  qrCode: string | null;
+}
+
 export interface Group {
   id: string;
   name: string;
@@ -88,6 +101,8 @@ export interface SendRow {
   created_at: string;
   sent_at: string | null;
   template_name: string;
+  session_id: string | null;
+  from_phone: string | null;
 }
 
 export interface QueueState {
@@ -97,6 +112,7 @@ export interface QueueState {
   dailyCap: number;
   nextSendAt: string | null;
   lastError: string | null;
+  numbers: Array<{ sessionId: string; queued: number; sentToday: number; nextSendAt: string | null; lastError: string | null }>;
 }
 
 export interface Excluded {

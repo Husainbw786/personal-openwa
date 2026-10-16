@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { api, formatPhone, formatTime, type SendRow } from '../api';
+import { fromLabel, loadSessions, sessionTitle } from '../sessions';
 import { Empty, ErrorBox, Header, Spinner, StatusChip, useLoad } from '../ui';
 
 const FILTERS = [
@@ -15,8 +16,11 @@ export default function History() {
   const [status, setStatus] = useState('');
   const [query, setQuery] = useState('');
   const [open, setOpen] = useState<number | null>(null);
-  const params = new URLSearchParams({ limit: '100', ...(status ? { status } : {}), ...(query ? { q: query } : {}) });
-  const { data, error, loading, reload } = useLoad(() => api<SendRow[]>(`/api/sends?${params}`), [status, query], 10_000);
+  const [session, setSession] = useState('');
+  const sessions = useLoad(loadSessions, []);
+  const params = new URLSearchParams({ limit: '100', ...(status ? { status } : {}), ...(query ? { q: query } : {}), ...(session ? { session } : {}) });
+  const { data, error, loading, reload } = useLoad(() => api<SendRow[]>(`/api/sends?${params}`), [status, query, session], 10_000);
+  const multi = (sessions.data?.length ?? 0) > 1;
 
   return (
     <>
@@ -30,6 +34,12 @@ export default function History() {
             </button>
           ))}
         </div>
+        {multi && (
+          <select value={session} onChange={(e) => setSession(e.target.value)} aria-label="Sent from" className="w-full rounded-xl border border-gray-200 bg-white px-3 py-2 text-xs outline-none focus:border-brand">
+            <option value="">From all numbers</option>
+            {sessions.data!.map((s) => <option key={s.id} value={s.id}>From {sessionTitle(s)}</option>)}
+          </select>
+        )}
       </div>
       {loading && !data && <Spinner />}
       {error && <ErrorBox message={error} retry={reload} />}
@@ -44,10 +54,14 @@ export default function History() {
               </div>
               <p className="truncate text-xs text-gray-500">
                 {s.template_name}{s.group_name ? ` · ${s.group_name}` : ''} · {formatTime(s.sent_at ?? s.created_at)}
+                {multi && fromLabel(sessions.data, s.session_id, s.from_phone) && ` · from ${fromLabel(sessions.data, s.session_id, s.from_phone)}`}
               </p>
               {open === s.id && (
                 <div className="mt-2 space-y-1 text-sm">
-                  <p className="text-xs text-gray-500">{formatPhone(s.phone)}</p>
+                  <p className="text-xs text-gray-500">
+                    To {formatPhone(s.phone)}
+                    {fromLabel(sessions.data, s.session_id, s.from_phone) && ` · from ${fromLabel(sessions.data, s.session_id, s.from_phone)}`}
+                  </p>
                   {s.text && <p className="whitespace-pre-wrap rounded-lg bg-[#dcf8c6] px-3 py-2">{s.text}</p>}
                   {s.error && <p className="text-xs text-red-700">{s.error}</p>}
                 </div>

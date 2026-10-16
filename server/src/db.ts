@@ -80,6 +80,13 @@ db.exec(`
   );
 `);
 
+// Multi-number: which OpenWA session sends each row, and the number it went out from.
+// Rows from before this have NULL and are backfilled with the default session on boot.
+const sendColumns = new Set((db.prepare('PRAGMA table_info(sends)').all() as Array<{ name: string }>).map((c) => c.name));
+if (!sendColumns.has('session_id')) db.exec('ALTER TABLE sends ADD COLUMN session_id TEXT');
+if (!sendColumns.has('from_phone')) db.exec('ALTER TABLE sends ADD COLUMN from_phone TEXT');
+db.exec('CREATE INDEX IF NOT EXISTS sends_session_day ON sends(session_id, sent_day)');
+
 export function getSetting(key: string, fallback: string): string {
   const row = db.prepare('SELECT value FROM settings WHERE key = ?').get(key) as { value: string } | undefined;
   return row?.value ?? fallback;

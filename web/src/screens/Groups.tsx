@@ -1,16 +1,32 @@
 import { useEffect, useState } from 'react';
 import { api, type ContactList, type Group } from '../api';
+import { getViewSession, loadSessions, resolveSession, sessionTitle, setViewSession } from '../sessions';
 import { Button, Empty, ErrorBox, Header, Sheet, Spinner, toast, useLoad } from '../ui';
 
 const MAX_SEARCH_RESULTS = 30;
 
 export default function Groups({ navigate }: { navigate: (to: string) => void }) {
   const [refresh, setRefresh] = useState(0);
-  const groups = useLoad(() => api<Group[]>(`/api/groups${refresh ? '?refresh=1' : ''}`), [refresh]);
+  // Groups come from one number at a time; uploaded lists work with any number.
+  const sessions = useLoad(loadSessions, []);
+  const [stored, setStored] = useState(getViewSession);
+  const view = resolveSession(sessions.data, stored);
+  const viewId = view?.id ?? stored ?? '';
+  const sessionQs = viewId ? `session=${encodeURIComponent(viewId)}` : '';
+  const groups = useLoad(
+    () => api<Group[]>(`/api/groups?${[sessionQs, refresh ? 'refresh=1' : ''].filter(Boolean).join('&')}`),
+    [refresh, viewId],
+  );
   const lists = useLoad(() => api<ContactList[]>('/api/lists'), []);
   const [query, setQuery] = useState('');
   const [counts, setCounts] = useState<Record<string, number | null>>({});
   const [uploadOpen, setUploadOpen] = useState(false);
+
+  function pickNumber(id: string) {
+    setViewSession(id);
+    setStored(id);
+    setCounts({});
+  }
 
   const all = groups.data ?? [];
   const searching = query.trim().length > 0;
@@ -24,13 +40,13 @@ export default function Groups({ navigate }: { navigate: (to: string) => void })
     const missing = visible.map((g) => g.id).filter((id) => !(id in counts));
     if (missing.length === 0) return;
     const timer = setTimeout(() => {
-      api<Record<string, number | null>>('/api/groups/counts', { method: 'POST', body: { ids: missing } })
+      api<Record<string, number | null>>(`/api/groups/counts?${sessionQs}`, { method: 'POST', body: { ids: missing } })
         .then((c) => setCounts((prev) => ({ ...prev, ...c })))
         .catch(() => {});
     }, 250);
     return () => clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [visibleKey]);
+  }, [visibleKey, viewId]);
 
   async function toggleFavorite(g: Group) {
     groups.setData((list) => list?.map((x) => (x.id === g.id ? { ...x, favorite: !x.favorite } : x)) ?? null);
@@ -50,7 +66,23 @@ export default function Groups({ navigate }: { navigate: (to: string) => void })
           </button>
         }
       />
-      <div className="sticky top-14 z-10 bg-surface p-3">
+      <div className="sticky top-14 z-10 space-y-2 bg-surface p-3">
+        {sessions.data && sessions.data.length > 1 && (
+          <div className="flex gap-1.5 overflow-x-auto text-xs" role="tablist" aria-label="Show groups of">
+            {sessions.data.map((s) => (
+              <button
+                key={s.id}
+                role="tab"
+                aria-selected={s.id === view?.id}
+                onClick={() => pickNumber(s.id)}
+                className={`flex shrink-0 items-center gap-1.5 rounded-full border px-3 py-1.5 ${s.id === view?.id ? 'border-brand bg-brand text-white' : 'border-gray-200 bg-white text-gray-700'}`}
+              >
+                <span className={`h-1.5 w-1.5 rounded-full ${s.status === 'ready' ? 'bg-accent' : 'bg-amber-500'}`} />
+                {sessionTitle(s)}
+              </button>
+            ))}
+          </div>
+        )}
         <input
           value={query}
           onChange={(e) => setQuery(e.target.value)}

@@ -77,8 +77,11 @@ function safeJson(text: string): unknown {
 
 const enc = encodeURIComponent;
 
-/** Our app uses exactly one WhatsApp session. We look it up by name and create it if missing. */
-let sessionId: string | null = null;
+/**
+ * Each linked WhatsApp number is one OpenWA session. The one named OPENWA_SESSION ("main") is the
+ * default and is created on boot; more can be added from the app. Session ids are OpenWA's ids.
+ */
+let defaultId: string | null = null;
 
 export async function ensureSession(): Promise<Session> {
   const sessions = await call<Session[]>('GET', '/api/sessions');
@@ -86,49 +89,60 @@ export async function ensureSession(): Promise<Session> {
   if (!session) {
     session = await call<Session>('POST', '/api/sessions', { name: config.openwaSessionName });
   }
-  sessionId = session.id;
+  defaultId = session.id;
   return session;
 }
 
-async function sid(): Promise<string> {
-  if (!sessionId) await ensureSession();
-  return sessionId!;
+export async function defaultSessionId(): Promise<string> {
+  if (!defaultId) await ensureSession();
+  return defaultId!;
 }
 
+const base = (sessionId: string) => `/api/sessions/${enc(sessionId)}`;
+
 export const openwa = {
-  async getSession(): Promise<Session> {
-    return call<Session>('GET', `/api/sessions/${enc(await sid())}`);
+  async listSessions(): Promise<Session[]> {
+    return call('GET', '/api/sessions');
   },
-  async start(): Promise<void> {
-    await call('POST', `/api/sessions/${enc(await sid())}/start`);
+  async createSession(name: string): Promise<Session> {
+    return call('POST', '/api/sessions', { name });
   },
-  async logout(): Promise<void> {
-    await call('POST', `/api/sessions/${enc(await sid())}/logout`);
+  async deleteSession(sessionId: string): Promise<void> {
+    await call('DELETE', base(sessionId));
   },
-  async getQr(): Promise<{ qrCode: string; status: SessionStatus }> {
-    return call('GET', `/api/sessions/${enc(await sid())}/qr`);
+  async getSession(sessionId: string): Promise<Session> {
+    return call<Session>('GET', base(sessionId));
   },
-  async listGroups(): Promise<GroupSummary[]> {
-    return call('GET', `/api/sessions/${enc(await sid())}/groups?limit=1000`);
+  async start(sessionId: string): Promise<void> {
+    await call('POST', `${base(sessionId)}/start`);
   },
-  async getGroup(groupId: string): Promise<GroupInfo> {
-    return call('GET', `/api/sessions/${enc(await sid())}/groups/${enc(groupId)}`);
+  async logout(sessionId: string): Promise<void> {
+    await call('POST', `${base(sessionId)}/logout`);
   },
-  async listContacts(): Promise<Array<{ id: string; number?: string; name?: string }>> {
-    return call('GET', `/api/sessions/${enc(await sid())}/contacts`);
+  async getQr(sessionId: string): Promise<{ qrCode: string; status: SessionStatus }> {
+    return call('GET', `${base(sessionId)}/qr`);
   },
-  async resolvePhone(contactId: string): Promise<string | null> {
-    const res = await call<{ phone: string | null }>('GET', `/api/sessions/${enc(await sid())}/contacts/${enc(contactId)}/phone`);
+  async listGroups(sessionId: string): Promise<GroupSummary[]> {
+    return call('GET', `${base(sessionId)}/groups?limit=1000`);
+  },
+  async getGroup(sessionId: string, groupId: string): Promise<GroupInfo> {
+    return call('GET', `${base(sessionId)}/groups/${enc(groupId)}`);
+  },
+  async listContacts(sessionId: string): Promise<Array<{ id: string; number?: string; name?: string }>> {
+    return call('GET', `${base(sessionId)}/contacts`);
+  },
+  async resolvePhone(sessionId: string, contactId: string): Promise<string | null> {
+    const res = await call<{ phone: string | null }>('GET', `${base(sessionId)}/contacts/${enc(contactId)}/phone`);
     return res.phone;
   },
   /** idempotencyKey makes a retry after a crash safe: OpenWA replays the first result instead of sending twice. */
-  async sendText(chatId: string, text: string, idempotencyKey: string): Promise<{ messageId: string }> {
-    return call('POST', `/api/sessions/${enc(await sid())}/messages/send-text`, { chatId, text }, { 'Idempotency-Key': idempotencyKey });
+  async sendText(sessionId: string, chatId: string, text: string, idempotencyKey: string): Promise<{ messageId: string }> {
+    return call('POST', `${base(sessionId)}/messages/send-text`, { chatId, text }, { 'Idempotency-Key': idempotencyKey });
   },
-  async listWebhooks(): Promise<Array<{ id: string; url: string; events: string[] }>> {
-    return call('GET', `/api/sessions/${enc(await sid())}/webhooks`);
+  async listWebhooks(sessionId: string): Promise<Array<{ id: string; url: string; events: string[] }>> {
+    return call('GET', `${base(sessionId)}/webhooks`);
   },
-  async createWebhook(url: string, events: string[], secret?: string): Promise<void> {
-    await call('POST', `/api/sessions/${enc(await sid())}/webhooks`, { url, events, ...(secret ? { secret } : {}), retryCount: 3 });
+  async createWebhook(sessionId: string, url: string, events: string[], secret?: string): Promise<void> {
+    await call('POST', `${base(sessionId)}/webhooks`, { url, events, ...(secret ? { secret } : {}), retryCount: 3 });
   },
 };

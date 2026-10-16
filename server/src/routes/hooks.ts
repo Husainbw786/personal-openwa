@@ -37,14 +37,14 @@ export function hookRoutes(app: FastifyInstance): void {
   });
 }
 
-/** Make sure OpenWA knows where to send delivery/read updates. Safe to call on every boot. */
-export async function registerWebhook(log: { info: (m: string) => void; warn: (o: object, m: string) => void }): Promise<void> {
+/** Make sure OpenWA knows where to send delivery/read updates for a number. Webhooks are per session; safe to call on every boot. */
+export async function registerWebhook(sessionId: string, log: { info: (m: string) => void; warn: (o: object, m: string) => void }): Promise<void> {
   if (!config.webhookUrl) return;
   try {
-    const hooks = await openwa.listWebhooks();
+    const hooks = await openwa.listWebhooks(sessionId);
     if (hooks.some((h) => h.url === config.webhookUrl)) return;
-    await openwa.createWebhook(config.webhookUrl, ['message.ack', 'message.failed', 'session.status'], config.webhookSecret || undefined);
-    log.info(`registered OpenWA webhook -> ${config.webhookUrl}`);
+    await openwa.createWebhook(sessionId, config.webhookUrl, ['message.ack', 'message.failed', 'session.status'], config.webhookSecret || undefined);
+    log.info(`registered OpenWA webhook for ${sessionId} -> ${config.webhookUrl}`);
   } catch (err) {
     log.warn({ err: String(err) }, 'could not register OpenWA webhook (delivery ticks will not update)');
   }

@@ -18,17 +18,18 @@ export interface Member extends RawMember {
 
 const CACHE_MS = 5 * 60 * 1000;
 
-/** Names from the WhatsApp address book, keyed by phone digits and by raw id. */
-let contactCache: { at: number; names: Map<string, string> } | null = null;
-async function getContactNames(): Promise<Map<string, string>> {
-  if (contactCache && Date.now() - contactCache.at < CACHE_MS) return contactCache.names;
+/** Names from each number's WhatsApp address book, keyed by phone digits and by raw id. */
+const contactCache = new Map<string, { at: number; names: Map<string, string> }>();
+async function getContactNames(sessionId: string): Promise<Map<string, string>> {
+  const cached = contactCache.get(sessionId);
+  if (cached && Date.now() - cached.at < CACHE_MS) return cached.names;
   const names = new Map<string, string>();
-  for (const c of await openwa.listContacts().catch(() => [])) {
+  for (const c of await openwa.listContacts(sessionId).catch(() => [])) {
     if (!c.name) continue;
     names.set(c.id, c.name);
     if (c.id.endsWith('@c.us') && c.number) names.set(normalizePhone(c.number), c.name);
   }
-  contactCache = { at: Date.now(), names };
+  contactCache.set(sessionId, { at: Date.now(), names });
   return names;
 }
 
@@ -38,13 +39,13 @@ async function getContactNames(): Promise<Map<string, string>> {
  * which we can still message directly. Lookups are cached because big groups have thousands.
  */
 const lidCache = new Map<string, string | null>();
-async function recipientKey(id: string, number: string): Promise<string | null> {
+async function recipientKey(sessionId: string, id: string, number: string): Promise<string | null> {
   if (!id.endsWith('@lid')) {
     const phone = normalizePhone(number || id);
     return isValidPhone(phone) ? phone : null;
   }
   if (!lidCache.has(id)) {
-    const resolved = await openwa.resolvePhone(id).catch(() => null);
+    const resolved = await openwa.resolvePhone(sessionId, id).catch(() => null);
     lidCache.set(id, resolved ? normalizePhone(resolved) : null);
   }
   const phone = lidCache.get(id);
@@ -65,25 +66,40 @@ export async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T) =>
   return out;
 }
 
-let selfCache: { at: number; phone: string | null } | null = null;
-async function selfPhone(): Promise<string | null> {
-  if (selfCache && Date.now() - selfCache.at < CACHE_MS) return selfCache.phone;
-  const session = await openwa.getSession();
-  selfCache = { at: Date.now(), phone: session.phone ? normalizePhone(session.phone) : null };
-  return selfCache.phone;
+const selfCache = new Map<string, { at: number; phone: string | null }>();
+async function selfPhone(sessionId: string): Promise<string | null> {
+  const cached = selfCache.get(sessionId);
+  if (cached && Date.now() - cached.at < CACHE_MS) return cached.phone;
+  const session = await openwa.getSession(sessionId);
+  const phone = session.phone ? normalizePhone(session.phone) : null;
+  selfCache.set(sessionId, { at: Date.now(), phone });
+  return phone;
 }
+
+/** Group data is per number: the same group looks the same, but a number only sees groups it is in. */
+const cacheKey = (sessionId: string, groupId: string) => `${sessionId}|${groupId}`;
 
 /** Member count per group, filled whenever we load a group. */
 export const groupCounts = new Map<string, { at: number; count: number }>();
 
 const groupMemberCache = new Map<string, { at: number; name: string; description: string; members: RawMember[] }>();
 
-export async function loadGroupMembers(groupId: string, fresh = false) {
-  const cached = groupMemberCache.get(groupId);
+/** Forget everything cached for a number (after it logs out or is removed). */
+export function forgetSession(sessionId: string): void {
+  contactCache.delete(sessionId);
+  selfCache.delete(sessionId);
+  for (const map of [groupCounts, groupMemberCache]) {
+    for (const key of map.keys()) if (key.startsWith(`${sessionId}|`)) map.delete(key);
+  }
+}
+
+export async function loadGroupMembers(sessionId: string, groupId: string, fresh = false) {
+  const key = cacheKey(sessionId, groupId);
+  const cached = groupMemberCache.get(key);
   if (!fresh && cached && Date.now() - cached.at < CACHE_MS) return cached;
 
-  const [group, self, contactNames] = await Promise.all([openwa.getGroup(groupId), selfPhone(), getContactNames()]);
-  const keys = await mapLimit(group.participants, 16, (p) => recipientKey(p.id, p.number));
+  const [group, self, contactNames] = await Promise.all([openwa.getGroup(sessionId, groupId), selfPhone(sessionId), getContactNames(sessionId)]);
+  const keys = await mapLimit(group.participants, 16, (p) => recipientKey(sessionId, p.id, p.number));
   const members: RawMember[] = [];
   for (const [i, p] of group.participants.entries()) {
     const phone = keys[i];
@@ -91,18 +107,19 @@ export async function loadGroupMembers(groupId: string, fresh = false) {
     members.push({ phone, whatsappName: p.name ?? contactNames.get(phone) ?? contactNames.get(p.id) ?? null, isAdmin: p.isAdmin });
   }
   const entry = { at: Date.now(), name: group.name, description: group.description ?? '', members };
-  groupMemberCache.set(groupId, entry);
-  groupCounts.set(groupId, { at: Date.now(), count: members.length });
+  groupMemberCache.set(key, entry);
+  groupCounts.set(key, { at: Date.now(), count: members.length });
   return entry;
 }
 
 /** Just the member count, without resolving hidden numbers (cheap, used by the groups list). */
-export async function groupCount(groupId: string): Promise<number> {
-  const cached = groupCounts.get(groupId);
+export async function groupCount(sessionId: string, groupId: string): Promise<number> {
+  const key = cacheKey(sessionId, groupId);
+  const cached = groupCounts.get(key);
   if (cached && Date.now() - cached.at < CACHE_MS) return cached.count;
-  const group = await openwa.getGroup(groupId);
+  const group = await openwa.getGroup(sessionId, groupId);
   const count = Math.max(0, group.participants.length - 1); // minus you
-  groupCounts.set(groupId, { at: Date.now(), count });
+  groupCounts.set(key, { at: Date.now(), count });
   return count;
 }
 

@@ -2,7 +2,7 @@
 
 Send personalised WhatsApp messages to members of your groups, 5–10 people at a time, from your phone or laptop.
 
-- One WhatsApp number, connected 24/7 through [OpenWA](https://github.com/rmyndharis/OpenWA) (unofficial gateway, Baileys engine).
+- One or more WhatsApp numbers, connected 24/7 through [OpenWA](https://github.com/rmyndharis/OpenWA) (unofficial gateway, Baileys engine). Link extra numbers under More → WhatsApp connection, then pick "Send from" on any group or list. Nobody gets the same template twice, whichever number sent it.
 - Pick a group → pick a template → tick people → send. Messages go out one by one with a random 45–120 s gap.
 - **Never the same template twice to the same person** (enforced by the database).
 - Hide numbers you never want to message, across all groups.
@@ -61,7 +61,7 @@ cd web && npm install && npm run dev        # http://localhost:5173
 | Key | Default | Meaning |
 |---|---|---|
 | `MIN_DELAY_SEC` / `MAX_DELAY_SEC` | 45 / 120 | Random gap between two messages |
-| `DAILY_CAP` | 40 | Max messages per day; the rest wait for tomorrow |
+| `DAILY_CAP` | 40 | Max messages per day, per number; the rest wait for tomorrow |
 | `MAX_BATCH` | 10 | Max people per send |
 
 OpenWA also enforces its own warm-up limits for new numbers and first-time chats (`SEND_PACING_ENABLED`). When it says "slow down", messages simply stay queued and retry later.

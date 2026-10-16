@@ -1,10 +1,12 @@
 import { useState } from 'react';
 import { api, formatPhone, formatTime, type Excluded, type QueueState } from '../api';
+import { loadSessions, sessionTitle } from '../sessions';
 import { Button, Header, toast, useLoad } from '../ui';
 
 export default function More({ navigate, onLogout }: { navigate: (to: string) => void; onLogout: () => void }) {
   const excluded = useLoad(() => api<Excluded[]>('/api/excluded'), []);
   const queue = useLoad(() => api<QueueState>('/api/queue'), []);
+  const sessions = useLoad(loadSessions, []);
   const [phone, setPhone] = useState('');
   const [note, setNote] = useState('');
 
@@ -42,7 +44,14 @@ export default function More({ navigate, onLogout }: { navigate: (to: string) =>
       <Header title="More" />
       <div className="space-y-3 p-3">
         <button onClick={() => navigate('/connect')} className="flex w-full items-center justify-between rounded-2xl bg-white p-4 text-left shadow-sm">
-          <span className="font-semibold">WhatsApp connection</span>
+          <span>
+            <span className="block font-semibold">WhatsApp connection</span>
+            {sessions.data && (
+              <span className="block text-xs text-gray-500">
+                {sessions.data.filter((s) => s.status === 'ready').length} of {sessions.data.length} number{sessions.data.length === 1 ? '' : 's'} connected
+              </span>
+            )}
+          </span>
           <span className="text-gray-400">›</span>
         </button>
 
@@ -50,8 +59,16 @@ export default function More({ navigate, onLogout }: { navigate: (to: string) =>
           <h2 className="font-semibold">Sending</h2>
           {queue.data && (
             <p className="mt-1 text-sm text-gray-600">
-              {queue.data.sentToday} sent today (limit {queue.data.dailyCap}) · {queue.data.queued} waiting{queue.data.paused ? ' · paused' : ''}
+              {queue.data.sentToday} sent today (limit {queue.data.dailyCap} per number) · {queue.data.queued} waiting{queue.data.paused ? ' · paused' : ''}
             </p>
+          )}
+          {queue.data && (sessions.data?.length ?? 0) > 1 && (
+            <ul className="mt-1 text-xs text-gray-500">
+              {sessions.data!.map((s) => {
+                const n = queue.data!.numbers.find((x) => x.sessionId === s.id);
+                return <li key={s.id}>{sessionTitle(s)}: {n?.sentToday ?? 0}/{queue.data!.dailyCap} today · {n?.queued ?? 0} waiting</li>;
+              })}
+            </ul>
           )}
           <Button variant="danger" className="mt-3" onClick={cancelQueue} disabled={!queue.data?.queued}>Cancel waiting messages</Button>
         </section>
