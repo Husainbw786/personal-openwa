@@ -13,6 +13,7 @@ import { templateRoutes } from './routes/templates.ts';
 import { sendRoutes } from './routes/sends.ts';
 import { contactRoutes } from './routes/contacts.ts';
 import { hookRoutes, registerWebhook } from './routes/hooks.ts';
+import { listRoutes } from './routes/lists.ts';
 
 const app = Fastify({ logger: { level: process.env.LOG_LEVEL ?? 'info' }, trustProxy: true });
 
@@ -53,6 +54,7 @@ templateRoutes(app);
 sendRoutes(app);
 contactRoutes(app);
 hookRoutes(app);
+listRoutes(app);
 
 app.get('/healthz', async () => ({ ok: true }));
 

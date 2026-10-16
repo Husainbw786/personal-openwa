@@ -1,57 +1,11 @@
 import type { FastifyInstance } from 'fastify';
 import { db } from '../db.ts';
 import { openwa, type GroupSummary } from '../openwa.ts';
-import { normalizePhone, isValidPhone, normalizeRecipient, isValidRecipient } from '../phone.ts';
+import { annotate, groupCount, loadGroupMembers, mapLimit } from '../members.ts';
+import { sendCsv, sendPdf, toRows } from '../export.ts';
 
 let groupCache: { at: number; groups: GroupSummary[] } | null = null;
 const GROUP_CACHE_MS = 5 * 60 * 1000;
-
-/** Names from the WhatsApp address book, keyed by phone digits and by raw id. */
-let contactCache: { at: number; names: Map<string, string> } | null = null;
-async function getContactNames(): Promise<Map<string, string>> {
-  if (contactCache && Date.now() - contactCache.at < GROUP_CACHE_MS) return contactCache.names;
-  const names = new Map<string, string>();
-  for (const c of await openwa.listContacts().catch(() => [])) {
-    if (!c.name) continue;
-    names.set(c.id, c.name);
-    if (c.id.endsWith('@c.us') && c.number) names.set(normalizePhone(c.number), c.name);
-  }
-  contactCache = { at: Date.now(), names };
-  return names;
-}
-
-/**
- * WhatsApp hides some members' numbers behind a privacy id (@lid). For those, OpenWA's `number`
- * is the lid digits, not a phone. Try to map it to a real phone; otherwise keep "<lid>@lid",
- * which we can still message directly. Lookups are cached because big groups have thousands.
- */
-const lidCache = new Map<string, string | null>();
-async function recipientKey(id: string, number: string): Promise<string | null> {
-  if (!id.endsWith('@lid')) {
-    const phone = normalizePhone(number || id);
-    return isValidPhone(phone) ? phone : null;
-  }
-  if (!lidCache.has(id)) {
-    const resolved = await openwa.resolvePhone(id).catch(() => null);
-    lidCache.set(id, resolved ? normalizePhone(resolved) : null);
-  }
-  const phone = lidCache.get(id);
-  if (phone && isValidPhone(phone)) return phone;
-  const key = normalizeRecipient(id);
-  return isValidRecipient(key) ? key : null;
-}
-
-async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
-  const out = new Array<R>(items.length);
-  let next = 0;
-  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, async () => {
-    while (next < items.length) {
-      const i = next++;
-      out[i] = await fn(items[i]);
-    }
-  }));
-  return out;
-}
 
 export function waRoutes(app: FastifyInstance): void {
   app.get('/api/wa/status', async () => {
@@ -84,6 +38,13 @@ export function waRoutes(app: FastifyInstance): void {
       .sort((a, b) => Number(b.favorite) - Number(a.favorite) || a.name.localeCompare(b.name));
   });
 
+  /** Member counts for the groups currently on screen (the list itself has no counts). */
+  app.post<{ Body: { ids: string[] } }>('/api/groups/counts', async (req) => {
+    const ids = (req.body?.ids ?? []).slice(0, 50);
+    const counts = await mapLimit(ids, 6, (id) => groupCount(id).catch(() => null));
+    return Object.fromEntries(ids.map((id, i) => [id, counts[i]]));
+  });
+
   app.put<{ Params: { id: string }; Body: { favorite: boolean; name?: string } }>('/api/groups/:id/favorite', async (req) => {
     if (req.body.favorite) {
       db.prepare('INSERT OR REPLACE INTO favorite_groups (group_id, name) VALUES (?, ?)').run(req.params.id, req.body.name ?? null);
@@ -93,46 +54,18 @@ export function waRoutes(app: FastifyInstance): void {
     return { ok: true };
   });
 
-  /**
-   * Group members, annotated for the selected template:
-   * excluded (hidden by default), alreadySent (greyed out), queued (in progress).
-   */
-  app.get<{ Params: { id: string }; Querystring: { templateId?: string } }>('/api/groups/:id', async (req) => {
-    const [group, session] = await Promise.all([openwa.getGroup(req.params.id), openwa.getSession()]);
-    const self = session.phone ? normalizePhone(session.phone) : null;
+  /** Group members, annotated for the selected template: hidden, already got it, or selectable. */
+  app.get<{ Params: { id: string }; Querystring: { templateId?: string; fresh?: string } }>('/api/groups/:id', async (req) => {
+    const group = await loadGroupMembers(req.params.id, req.query.fresh === '1');
     const templateId = req.query.templateId ? Number(req.query.templateId) : null;
+    return { id: req.params.id, kind: 'group', name: group.name, description: group.description, members: annotate(group.members, templateId) };
+  });
 
-    const excluded = new Set((db.prepare('SELECT phone FROM excluded').all() as Array<{ phone: string }>).map((r) => r.phone));
-    const names = new Map((db.prepare('SELECT phone, name FROM contact_names').all() as Array<{ phone: string; name: string }>).map((r) => [r.phone, r.name]));
-    const sendStatus = new Map<string, string>();
-    if (templateId) {
-      for (const r of db.prepare(`SELECT phone, status FROM sends WHERE template_id = ?`).all(templateId) as Array<{ phone: string; status: string }>) {
-        sendStatus.set(r.phone, r.status);
-      }
-    }
-
-    const contactNames = await getContactNames();
-    const keys = await mapLimit(group.participants, 16, (p) => recipientKey(p.id, p.number));
-
-    const members = [];
-    for (const [i, p] of group.participants.entries()) {
-      const phone = keys[i];
-      if (!phone || phone === self) continue;
-      const status = sendStatus.get(phone) ?? null;
-      const whatsappName = p.name ?? contactNames.get(phone) ?? contactNames.get(p.id) ?? null;
-      members.push({
-        phone,
-        name: names.get(phone) ?? whatsappName,
-        whatsappName,
-        isAdmin: p.isAdmin,
-        excluded: excluded.has(phone),
-        sendStatus: status,
-        // failed/cancelled sends can be retried; anything else counts as "already got this template".
-        selectable: !excluded.has(phone) && (status === null || status === 'failed' || status === 'cancelled'),
-      });
-    }
-    members.sort((a, b) => Number(b.selectable) - Number(a.selectable) || (a.name ?? a.phone).localeCompare(b.name ?? b.phone));
-
-    return { id: group.id, name: group.name, description: group.description ?? '', members };
+  app.get<{ Params: { id: string; format: string } }>('/api/groups/:id/export.:format', async (req, reply) => {
+    const group = await loadGroupMembers(req.params.id);
+    const rows = toRows(annotate(group.members, null));
+    if (req.params.format === 'pdf') return sendPdf(reply, group.name, rows);
+    if (req.params.format === 'csv') return sendCsv(reply, group.name, rows);
+    return reply.code(404).send({ message: 'Use .csv or .pdf' });
   });
 }

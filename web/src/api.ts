@@ -52,8 +52,16 @@ export interface Member {
   selectable: boolean;
 }
 
+export interface ContactList {
+  id: number;
+  name: string;
+  created_at: string;
+  member_count: number;
+}
+
 export interface GroupDetail {
   id: string;
+  kind: 'group' | 'list';
   name: string;
   description: string;
   members: Member[];

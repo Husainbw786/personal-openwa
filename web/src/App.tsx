@@ -30,14 +30,15 @@ export default function App() {
   if (!loggedIn) return <Login onDone={() => setLoggedIn(true)} />;
 
   let screen;
-  if (route.startsWith('/groups/')) screen = <GroupDetail groupId={decodeURIComponent(route.slice('/groups/'.length))} navigate={navigate} />;
+  if (route.startsWith('/groups/')) screen = <GroupDetail key={route} source={{ kind: 'group', id: decodeURIComponent(route.slice('/groups/'.length)) }} navigate={navigate} />;
+  else if (route.startsWith('/lists/')) screen = <GroupDetail key={route} source={{ kind: 'list', id: Number(route.slice('/lists/'.length)) }} navigate={navigate} />;
   else if (route === '/templates') screen = <Templates />;
   else if (route === '/history') screen = <History />;
   else if (route === '/more') screen = <More navigate={navigate} onLogout={() => setLoggedIn(false)} />;
   else if (route === '/connect') screen = <Connect navigate={navigate} />;
   else screen = <Groups navigate={navigate} />;
 
-  const hideNav = route.startsWith('/groups/');
+  const hideNav = route.startsWith('/groups/') || route.startsWith('/lists/');
 
   return (
     <div className="mx-auto flex min-h-full max-w-2xl flex-col bg-surface">

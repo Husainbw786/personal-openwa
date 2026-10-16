@@ -4,13 +4,25 @@ import { Button, Empty, ErrorBox, Header, Sheet, Spinner, StatusChip, toast, use
 
 const MAX_BATCH = 10;
 
-export default function GroupDetail({ groupId, navigate }: { groupId: string; navigate: (to: string) => void }) {
+/** A WhatsApp group, or an uploaded contact list: both work the same way. */
+export type Source = { kind: 'group'; id: string } | { kind: 'list'; id: number };
+
+export default function GroupDetail({ source, navigate }: { source: Source; navigate: (to: string) => void }) {
   const templates = useLoad(() => api<Template[]>('/api/templates'), []);
   const active = (templates.data ?? []).filter((t) => !t.archived);
   const [templateId, setTemplateId] = useState<number | null>(() => Number(localStorage.getItem('lastTemplateId')) || null);
   const template = active.find((t) => t.id === templateId) ?? null;
 
-  const group = useLoad(() => api<Detail>(`/api/groups/${encodeURIComponent(groupId)}${template ? `?templateId=${template.id}` : ''}`), [groupId, template?.id]);
+  const basePath = source.kind === 'group' ? `/api/groups/${encodeURIComponent(source.id)}` : `/api/lists/${source.id}`;
+  const group = useLoad(() => api<Detail>(`${basePath}${template ? `?templateId=${template.id}` : ''}`), [basePath, template?.id]);
+  const [menuOpen, setMenuOpen] = useState(false);
+
+  async function deleteList() {
+    if (!confirm('Delete this uploaded list? Send history is kept, so nobody gets the same template twice.')) return;
+    await api(basePath, { method: 'DELETE' });
+    toast('List deleted');
+    navigate('/groups');
+  }
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [filter, setFilter] = useState<'available' | 'all' | 'sent' | 'excluded'>('available');
   const [query, setQuery] = useState('');
@@ -100,7 +112,35 @@ export default function GroupDetail({ groupId, navigate }: { groupId: string; na
 
   return (
     <div className="pb-28">
-      <Header title={group.data?.name ?? 'Group'} back={() => navigate('/groups')} />
+      <Header
+        title={group.data?.name ?? (source.kind === 'list' ? 'List' : 'Group')}
+        back={() => navigate('/groups')}
+        right={
+          <button onClick={() => setMenuOpen(true)} className="rounded-full px-3 py-2 text-xl leading-none hover:bg-white/10" aria-label="More options">⋮</button>
+        }
+      />
+      {group.data && (
+        <p className="bg-white px-4 pt-2 text-xs text-gray-500">
+          {members.length} {source.kind === 'list' ? 'contacts · uploaded list' : 'members'}
+          {members.some((m) => m.phone.endsWith('@lid')) && ` · ${members.filter((m) => m.phone.endsWith('@lid')).length} with hidden numbers`}
+        </p>
+      )}
+      <Sheet open={menuOpen} onClose={() => setMenuOpen(false)} title={group.data?.name ?? 'Options'}>
+        <div className="space-y-2">
+          <a href={`${basePath}/export.pdf`} download onClick={() => setMenuOpen(false)} className="block rounded-xl border border-gray-200 px-4 py-3 text-sm font-semibold text-brand">
+            Download contacts (PDF)
+          </a>
+          <a href={`${basePath}/export.csv`} download onClick={() => setMenuOpen(false)} className="block rounded-xl border border-gray-200 px-4 py-3 text-sm font-semibold text-brand">
+            Download contacts (CSV, for uploading)
+          </a>
+          {source.kind === 'list' && (
+            <button onClick={deleteList} className="block w-full rounded-xl border border-red-200 px-4 py-3 text-left text-sm font-semibold text-red-700">
+              Delete this list
+            </button>
+          )}
+          <p className="pt-1 text-xs text-gray-500">The CSV can be uploaded back (Home → Upload CSV) to message these people from another number.</p>
+        </div>
+      </Sheet>
 
       <div className="space-y-3 bg-white p-3 shadow-sm">
         <label className="block">

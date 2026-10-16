@@ -60,6 +60,20 @@ db.exec(`
     name     TEXT
   );
 
+  -- Uploaded contact lists (CSV) that work like a group.
+  CREATE TABLE IF NOT EXISTS lists (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    name       TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
+  CREATE TABLE IF NOT EXISTS list_members (
+    list_id INTEGER NOT NULL REFERENCES lists(id) ON DELETE CASCADE,
+    phone   TEXT NOT NULL,
+    name    TEXT,
+    PRIMARY KEY (list_id, phone)
+  );
+
   CREATE TABLE IF NOT EXISTS settings (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
