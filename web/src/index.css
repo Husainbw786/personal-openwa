@@ -1,10 +1,17 @@
 @import 'tailwindcss';
 
+/* WhatsApp-style palette */
 @theme {
   --color-brand: #075e54;
   --color-brand-dark: #054d44;
   --color-accent: #25d366;
-  --color-surface: #f4f6f5;
+  --color-send: #00a884;
+  --color-bubble: #d9fdd3;
+  --color-wallpaper: #efeae2;
+  --color-panel: #f0f2f5;
+  --color-surface: #ffffff;
+  --color-ink: #111b21;
+  --color-muted: #667781;
 }
 
 html,
@@ -14,8 +21,15 @@ body,
 }
 
 body {
-  background: var(--color-surface);
-  color: #111b21;
+  background: var(--color-panel);
+  color: var(--color-ink);
   -webkit-tap-highlight-color: transparent;
   font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+}
+
+.no-scrollbar {
+  scrollbar-width: none;
+}
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
 }

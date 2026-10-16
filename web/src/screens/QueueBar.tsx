@@ -3,7 +3,7 @@ import { api, type QueueState } from '../api';
 import { loadSessions, sessionTitle } from '../sessions';
 import { useLoad } from '../ui';
 
-/** Always-visible strip: WhatsApp connection + what the sender is doing right now. */
+/** Strip under every header: a disconnected number, and what the sender is doing right now. */
 const STATUS_LABEL: Record<string, string> = {
   created: 'not started',
   initializing: 'starting…',
@@ -14,7 +14,13 @@ const STATUS_LABEL: Record<string, string> = {
   failed: 'failed',
 };
 
-export default function QueueBar({ navigate, onConnectScreen }: { navigate: (to: string) => void; onConnectScreen: boolean }) {
+const secondsUntil = (iso: string | null) => (iso ? Math.max(0, Math.round((new Date(iso).getTime() - Date.now()) / 1000)) : 0);
+
+function formatWait(s: number) {
+  return s >= 60 ? `${Math.floor(s / 60)}m ${s % 60}s` : `${s}s`;
+}
+
+export default function QueueBar() {
   const wa = useLoad(loadSessions, [], 15_000);
   const queue = useLoad(() => api<QueueState>('/api/queue'), [], 5_000);
   const [, tick] = useState(0);
@@ -23,6 +29,7 @@ export default function QueueBar({ navigate, onConnectScreen }: { navigate: (to:
     return () => clearInterval(t);
   }, []);
 
+  const onConnectScreen = window.location.hash === '#/connect';
   const q = queue.data;
   const sessions = wa.data ?? [];
   const main = sessions.find((s) => s.isDefault) ?? sessions[0];
@@ -40,46 +47,49 @@ export default function QueueBar({ navigate, onConnectScreen }: { navigate: (to:
     queue.setData(await api<QueueState>('/api/queue/pause', { method: 'POST', body: { paused: !q.paused } }));
   }
 
-  const secondsLeft = q?.nextSendAt ? Math.max(0, Math.round((new Date(q.nextSendAt).getTime() - Date.now()) / 1000)) : 0;
-
   return (
-    <div className="space-y-px">
+    <div>
       {(wa.error || (wa.data && warnAbout)) && !onConnectScreen && (
-        <button onClick={() => navigate('/connect')} className="flex w-full items-center gap-2 bg-amber-100 px-4 py-2 text-left text-sm text-amber-900">
-          <span className="h-2 w-2 rounded-full bg-amber-500" />
-          {wa.error ? 'Cannot reach the server' : warnAbout
-            ? `${sessions.length > 1 ? sessionTitle(warnAbout) : 'WhatsApp'} ${STATUS_LABEL[warnAbout.status] ?? warnAbout.status}${stuck ? ' — messages waiting' : ''} — tap to connect`
-            : ''}
+        <button onClick={() => { window.location.hash = '/connect'; }} className="flex w-full items-center gap-2.5 bg-[#fff3c4] px-4 py-2.5 text-left text-[13px] text-[#6b5200]">
+          <span className="h-2 w-2 shrink-0 rounded-full bg-amber-500" />
+          <span className="flex-1">
+            {wa.error ? 'Cannot reach the server' : warnAbout
+              ? `${sessions.length > 1 ? sessionTitle(warnAbout) : 'WhatsApp'} ${STATUS_LABEL[warnAbout.status] ?? warnAbout.status}${stuck ? ', messages are waiting' : ''}`
+              : ''}
+          </span>
+          {!wa.error && <span className="font-semibold">Connect</span>}
         </button>
       )}
       {q && (q.queued > 0 || q.paused) && (
-        <div className="flex items-center gap-3 bg-white px-4 py-2 text-sm">
-          <span className={`h-2 w-2 rounded-full ${q.paused ? 'bg-gray-400' : 'animate-pulse bg-accent'}`} />
-          <span className="flex-1">
+        <div className="flex items-center gap-3 bg-[#e7fce3] px-4 py-2 text-[13px] text-[#0a5c4c]">
+          <span className={`h-2 w-2 shrink-0 rounded-full ${q.paused ? 'bg-gray-400' : 'animate-pulse bg-accent'}`} />
+          <span className="min-w-0 flex-1">
             {waiting.length > 1 ? (
               <>
-                {q.paused ? 'Paused' : 'Sending'} · {q.queued} waiting
+                <span className="font-medium">{q.paused ? 'Paused' : 'Sending'} · {q.queued} waiting</span>
                 {waiting.map((n) => {
-                  const left = n.nextSendAt ? Math.max(0, Math.round((new Date(n.nextSendAt).getTime() - Date.now()) / 1000)) : 0;
+                  const left = secondsUntil(n.nextSendAt);
                   return (
-                    <span key={n.sessionId} className="block text-xs text-gray-600">
-                      {nameOf(n.sessionId)}: {n.queued} waiting · {n.sentToday}/{q.dailyCap} today
-                      {!q.paused && left > 0 && ` · next in ${left}s`}
-                      {n.lastError && <span className="block text-amber-700">{n.lastError}</span>}
+                    <span key={n.sessionId} className="block truncate text-xs text-[#0a5c4c]/80">
+                      {nameOf(n.sessionId)}: {n.queued} left · {n.sentToday}/{q.dailyCap} today{!q.paused && left > 0 && ` · next in ${formatWait(left)}`}
+                      {n.lastError && <span className="block text-amber-800">{n.lastError}</span>}
                     </span>
                   );
                 })}
               </>
             ) : (
               <>
-                {q.paused ? 'Paused' : 'Sending'} · {q.queued} waiting · {waiting[0]?.sentToday ?? q.sentToday}/{q.dailyCap} today
-                {sessions.length > 1 && waiting[0] && <span className="text-gray-500"> · from {nameOf(waiting[0].sessionId)}</span>}
-                {!q.paused && secondsLeft > 0 && <span className="text-gray-500"> · next in {secondsLeft}s</span>}
-                {q.lastError && <span className="block text-xs text-amber-700">{q.lastError}</span>}
+                <span className="font-medium">{q.paused ? 'Paused' : 'Sending'} · {q.queued} waiting</span>
+                <span className="text-[#0a5c4c]/80">
+                  {' '}· {waiting[0]?.sentToday ?? q.sentToday}/{q.dailyCap} today
+                  {!q.paused && secondsUntil(q.nextSendAt) > 0 && ` · next in ${formatWait(secondsUntil(q.nextSendAt))}`}
+                </span>
+                {sessions.length > 1 && waiting[0] && <span className="block text-xs text-[#0a5c4c]/80">from {nameOf(waiting[0].sessionId)}</span>}
+                {q.lastError && <span className="block text-xs text-amber-800">{q.lastError}</span>}
               </>
             )}
           </span>
-          <button onClick={togglePause} className="rounded-lg border border-gray-200 px-3 py-1 text-xs font-semibold text-brand">
+          <button onClick={togglePause} className="shrink-0 rounded-full px-2 py-1 text-[13px] font-semibold text-send hover:bg-white/60">
             {q.paused ? 'Resume' : 'Pause'}
           </button>
         </div>

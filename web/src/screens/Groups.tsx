@@ -1,11 +1,11 @@
 import { useEffect, useState } from 'react';
-import { api, type ContactList, type Group } from '../api';
+import { api, type Group, type WaSession } from '../api';
 import { getViewSession, loadSessions, resolveSession, sessionTitle, setViewSession } from '../sessions';
-import { Button, Empty, ErrorBox, Header, Sheet, Spinner, toast, useLoad } from '../ui';
+import { Avatar, Empty, ErrorBox, Fab, Icon, IconButton, MainHeader, SectionTitle, Spinner, toast, useLoad } from '../ui';
 
-const MAX_SEARCH_RESULTS = 30;
+const MAX_SEARCH_RESULTS = 40;
 
-export default function Groups({ navigate }: { navigate: (to: string) => void }) {
+export default function Groups({ route, navigate }: { route: string; navigate: (to: string) => void }) {
   const [refresh, setRefresh] = useState(0);
   // Groups come from one number at a time; uploaded lists work with any number.
   const sessions = useLoad(loadSessions, []);
@@ -17,10 +17,9 @@ export default function Groups({ navigate }: { navigate: (to: string) => void })
     () => api<Group[]>(`/api/groups?${[sessionQs, refresh ? 'refresh=1' : ''].filter(Boolean).join('&')}`),
     [refresh, viewId],
   );
-  const lists = useLoad(() => api<ContactList[]>('/api/lists'), []);
+  const [searchOpen, setSearchOpen] = useState(false);
   const [query, setQuery] = useState('');
   const [counts, setCounts] = useState<Record<string, number | null>>({});
-  const [uploadOpen, setUploadOpen] = useState(false);
 
   function pickNumber(id: string) {
     setViewSession(id);
@@ -29,7 +28,7 @@ export default function Groups({ navigate }: { navigate: (to: string) => void })
   }
 
   const all = groups.data ?? [];
-  const searching = query.trim().length > 0;
+  const searching = searchOpen && query.trim().length > 0;
   const starred = all.filter((g) => g.favorite);
   const results = searching ? all.filter((g) => g.name.toLowerCase().includes(query.trim().toLowerCase())).slice(0, MAX_SEARCH_RESULTS) : [];
   const visible = searching ? results : starred;
@@ -51,113 +50,92 @@ export default function Groups({ navigate }: { navigate: (to: string) => void })
   async function toggleFavorite(g: Group) {
     groups.setData((list) => list?.map((x) => (x.id === g.id ? { ...x, favorite: !x.favorite } : x)) ?? null);
     await api(`/api/groups/${encodeURIComponent(g.id)}/favorite`, { method: 'PUT', body: { favorite: !g.favorite, name: g.name } });
-    toast(g.favorite ? 'Removed from home' : 'Added to home');
+    toast(g.favorite ? 'Removed from starred' : 'Starred');
   }
 
   const notConnected = groups.error && /not (connected|ready)/i.test(groups.error);
+  const openSearch = () => setSearchOpen(true);
 
   return (
     <>
-      <Header
-        title="WA Sender"
-        right={
-          <button onClick={() => setRefresh((n) => n + 1)} className="rounded-full p-2 hover:bg-white/10" aria-label="Refresh groups">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M4 4v6h6M20 20v-6h-6M5.6 15A8 8 0 0019 17M18.4 9A8 8 0 005 7" /></svg>
-          </button>
-        }
+      <MainHeader
+        route={route}
+        navigate={navigate}
+        onSearch={openSearch}
+        actions={<IconButton icon="refresh" label="Refresh groups" onClick={() => { setRefresh((n) => n + 1); toast('Refreshing groups…'); }} />}
+        search={searchOpen ? { value: query, onChange: setQuery, onClose: () => { setSearchOpen(false); setQuery(''); }, placeholder: all.length ? `Search ${all.length} groups…` : 'Search groups…' } : undefined}
+        extra={sessions.data && <NumberSwitcher sessions={sessions.data} activeId={view?.id} onPick={pickNumber} navigate={navigate} />}
       />
-      <div className="sticky top-14 z-10 space-y-2 bg-surface p-3">
-        {sessions.data && sessions.data.length > 1 && (
-          <div className="flex gap-1.5 overflow-x-auto text-xs" role="tablist" aria-label="Show groups of">
-            {sessions.data.map((s) => (
-              <button
-                key={s.id}
-                role="tab"
-                aria-selected={s.id === view?.id}
-                onClick={() => pickNumber(s.id)}
-                className={`flex shrink-0 items-center gap-1.5 rounded-full border px-3 py-1.5 ${s.id === view?.id ? 'border-brand bg-brand text-white' : 'border-gray-200 bg-white text-gray-700'}`}
-              >
-                <span className={`h-1.5 w-1.5 rounded-full ${s.status === 'ready' ? 'bg-accent' : 'bg-amber-500'}`} />
-                {sessionTitle(s)}
-              </button>
-            ))}
-          </div>
-        )}
-        <input
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          placeholder={all.length ? `Search all ${all.length} groups` : 'Search groups'}
-          className="w-full rounded-xl border border-gray-200 bg-white px-4 py-2.5 text-sm outline-none focus:border-brand"
-        />
-      </div>
+
+      {searchOpen && !searching && (
+        <p className="px-6 py-10 text-center text-sm text-muted">Type a group name. Tap ☆ on a result to keep it on this screen.</p>
+      )}
 
       {searching ? (
         <>
-          <SectionTitle>Search results</SectionTitle>
           {results.length === 0 && groups.data && <Empty>No group matches “{query}”.</Empty>}
           <GroupList groups={results} counts={counts} navigate={navigate} onStar={toggleFavorite} />
-          {results.length === MAX_SEARCH_RESULTS && <p className="px-4 py-2 text-xs text-gray-500">Showing the first {MAX_SEARCH_RESULTS}. Type more to narrow it down.</p>}
+          {results.length === MAX_SEARCH_RESULTS && <p className="px-4 py-3 text-center text-xs text-muted">Showing the first {MAX_SEARCH_RESULTS}. Keep typing to narrow it down.</p>}
         </>
-      ) : (
+      ) : !searchOpen && (
         <>
-          <SectionTitle action={<button onClick={() => setUploadOpen(true)} className="text-sm font-semibold text-brand">+ Upload CSV</button>}>
-            Uploaded lists
-          </SectionTitle>
-          {lists.data?.length === 0 && (
-            <p className="bg-white px-4 py-3 text-sm text-gray-500">Upload contacts (CSV) to use them like a group, e.g. members of a group on your other number.</p>
-          )}
-          <ul className="divide-y divide-gray-100 bg-white">
-            {lists.data?.map((l) => (
-              <li key={l.id}>
-                <button onClick={() => navigate(`/lists/${l.id}`)} className="flex w-full items-center gap-3 px-4 py-3 text-left active:bg-gray-50">
-                  <Avatar label={l.name} list />
-                  <span className="min-w-0 flex-1">
-                    <span className="block truncate font-medium">{l.name}</span>
-                    <span className="block text-xs text-gray-500">{l.member_count} contacts · uploaded list</span>
-                  </span>
-                </button>
-              </li>
-            ))}
-          </ul>
-
-          <SectionTitle>Starred groups</SectionTitle>
           {groups.loading && !groups.data && <Spinner />}
           {notConnected && (
             <Empty>
-              Connect WhatsApp to see your groups.{' '}
-              <button onClick={() => navigate('/connect')} className="font-semibold text-brand underline">Connect now</button>
+              <span className="block text-base font-medium text-ink">{view ? sessionTitle(view) : 'WhatsApp'} isn't connected</span>
+              Link it to see its groups.
+              <span className="mt-4 block"><button onClick={() => navigate('/connect')} className="rounded-full bg-send px-5 py-2.5 text-sm font-semibold text-white">Connect now</button></span>
             </Empty>
           )}
           {groups.error && !notConnected && <ErrorBox message={groups.error} retry={groups.reload} />}
-          {groups.data && starred.length === 0 && (
-            <p className="bg-white px-4 py-3 text-sm text-gray-500">Search for a group above and tap ☆ to keep it here.</p>
+          {groups.data && (
+            starred.length === 0 ? (
+              <Empty>
+                <span className="mx-auto mb-3 flex h-16 w-16 items-center justify-center rounded-full bg-bubble text-send"><Icon name="star" size={30} /></span>
+                <span className="block text-base font-medium text-ink">Star the groups you message</span>
+                Search your {all.length} groups and tap ☆ to pin them here.
+                <span className="mt-4 block"><button onClick={openSearch} className="rounded-full bg-send px-5 py-2.5 text-sm font-semibold text-white">Find a group</button></span>
+              </Empty>
+            ) : (
+              <>
+                <SectionTitle>Starred · {starred.length}</SectionTitle>
+                <GroupList groups={starred} counts={counts} navigate={navigate} onStar={toggleFavorite} />
+                <button onClick={openSearch} className="flex w-full items-center gap-4 px-4 py-3 text-left text-send hover:bg-panel">
+                  <span className="flex h-12 w-12 items-center justify-center rounded-full bg-bubble"><Icon name="search" /></span>
+                  <span className="font-medium">Find another group</span>
+                </button>
+              </>
+            )
           )}
-          <GroupList groups={starred} counts={counts} navigate={navigate} onStar={toggleFavorite} />
         </>
       )}
 
-      <UploadSheet
-        open={uploadOpen}
-        onClose={() => setUploadOpen(false)}
-        onDone={(id) => { setUploadOpen(false); void lists.reload(); navigate(`/lists/${id}`); }}
-      />
+      {!searchOpen && groups.data && <Fab icon="search" label="Find a group" onClick={openSearch} />}
     </>
   );
 }
 
-function SectionTitle({ children, action }: { children: React.ReactNode; action?: React.ReactNode }) {
+/** Which number's groups to show. Only drawn when there is more than one number. */
+function NumberSwitcher({ sessions, activeId, onPick, navigate }: { sessions: WaSession[]; activeId?: string; onPick: (id: string) => void; navigate: (to: string) => void }) {
+  if (sessions.length < 2) return null;
   return (
-    <div className="flex items-center justify-between px-4 pb-1.5 pt-4">
-      <h2 className="text-xs font-semibold uppercase tracking-wide text-gray-500">{children}</h2>
-      {action}
-    </div>
-  );
-}
-
-function Avatar({ label, list }: { label: string; list?: boolean }) {
-  return (
-    <div className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-full font-semibold ${list ? 'bg-amber-100 text-amber-800' : 'bg-brand/10 text-brand'}`}>
-      {list ? '☰' : label.trim().charAt(0).toUpperCase() || '#'}
+    <div className="no-scrollbar flex gap-2 overflow-x-auto px-4 pb-2.5 pt-0.5" role="radiogroup" aria-label="Show groups of">
+      {sessions.map((s) => {
+        const active = s.id === activeId;
+        return (
+          <button
+            key={s.id}
+            role="radio"
+            aria-checked={active}
+            onClick={() => onPick(s.id)}
+            className={`flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full px-3.5 py-1.5 text-[13px] font-medium ${active ? 'bg-white text-brand' : 'bg-white/15 text-white'}`}
+          >
+            <span className={`h-2 w-2 rounded-full ${s.status === 'ready' ? 'bg-accent' : 'bg-amber-400'}`} />
+            {s.pushName || sessionTitle(s)}
+          </button>
+        );
+      })}
+      <button onClick={() => navigate('/connect')} aria-label="Link another number" className="flex shrink-0 items-center rounded-full bg-white/15 px-2.5 text-white"><Icon name="plus" size={18} /></button>
     </div>
   );
 }
@@ -169,65 +147,26 @@ function GroupList({ groups, counts, navigate, onStar }: {
   onStar: (g: Group) => void;
 }) {
   return (
-    <ul className="divide-y divide-gray-100 bg-white">
-      {groups.map((g) => (
-        <li key={g.id} className="flex items-center">
-          <button onClick={() => navigate(`/groups/${encodeURIComponent(g.id)}`)} className="flex min-w-0 flex-1 items-center gap-3 px-4 py-3 text-left active:bg-gray-50">
-            <Avatar label={g.name} />
-            <span className="min-w-0 flex-1">
-              <span className="block truncate font-medium">{g.name}</span>
-              <span className="block text-xs text-gray-500">
-                {g.id in counts ? (counts[g.id] === null ? '—' : `${counts[g.id]} members`) : 'counting…'}
-              </span>
-            </span>
-          </button>
-          <button onClick={() => onStar(g)} className={`px-4 py-3 text-xl ${g.favorite ? 'text-amber-500' : 'text-gray-300'}`} aria-label={g.favorite ? 'Unstar' : 'Star'}>
-            {g.favorite ? '★' : '☆'}
-          </button>
-        </li>
-      ))}
+    <ul>
+      {groups.map((g) => {
+        const open = () => navigate(`/groups/${encodeURIComponent(g.id)}`);
+        return (
+          <li key={g.id} className="flex items-center gap-4 pl-4 hover:bg-panel">
+            <button onClick={open} tabIndex={-1} aria-hidden="true"><Avatar label={g.name} /></button>
+            <div className="flex min-w-0 flex-1 items-center border-b border-gray-100">
+              <button onClick={open} className="min-w-0 flex-1 py-4 text-left">
+                <span className="block truncate text-[16px] font-medium">{g.name}</span>
+                <span className="block text-sm text-muted">
+                  {g.id in counts ? (counts[g.id] === null ? 'Members unavailable' : `${counts[g.id]} members`) : 'Counting members…'}
+                </span>
+              </button>
+              <button onClick={() => onStar(g)} className={`self-stretch px-4 text-xl ${g.favorite ? 'text-amber-500' : 'text-gray-300'}`} aria-label={g.favorite ? `Unstar ${g.name}` : `Star ${g.name}`}>
+                {g.favorite ? '★' : '☆'}
+              </button>
+            </div>
+          </li>
+        );
+      })}
     </ul>
-  );
-}
-
-function UploadSheet({ open, onClose, onDone }: { open: boolean; onClose: () => void; onDone: (id: number) => void }) {
-  const [name, setName] = useState('');
-  const [file, setFile] = useState<File | null>(null);
-  const [busy, setBusy] = useState(false);
-
-  async function upload() {
-    if (!file) return;
-    setBusy(true);
-    try {
-      const csv = await file.text();
-      const res = await api<{ id: number; added: number; duplicates: number; invalid: number }>('/api/lists', {
-        method: 'POST',
-        body: { name: name.trim() || file.name.replace(/\.[^.]+$/, ''), csv },
-      });
-      toast(`${res.added} contacts added${res.duplicates ? `, ${res.duplicates} duplicates skipped` : ''}${res.invalid ? `, ${res.invalid} invalid` : ''}`);
-      setName('');
-      setFile(null);
-      onDone(res.id);
-    } catch (err) {
-      toast(err instanceof Error ? err.message : 'Upload failed');
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  return (
-    <Sheet open={open} onClose={onClose} title="Upload contacts">
-      <div className="space-y-3">
-        <p className="text-sm text-gray-600">
-          A CSV with a <b>phone</b> column (and optionally <b>name</b>). The CSV you download from any group here works as-is.
-        </p>
-        <input type="file" accept=".csv,text/csv,text/plain" onChange={(e) => setFile(e.target.files?.[0] ?? null)} className="block w-full text-sm" />
-        <input value={name} onChange={(e) => setName(e.target.value)} placeholder="List name (e.g. Group A from number 1)" className="w-full rounded-xl border border-gray-200 px-3 py-2.5 text-sm outline-none focus:border-brand" />
-        <div className="flex gap-2">
-          <Button variant="ghost" className="flex-1" onClick={onClose}>Cancel</Button>
-          <Button className="flex-1" disabled={!file || busy} onClick={upload}>{busy ? 'Uploading…' : 'Upload'}</Button>
-        </div>
-      </div>
-    </Sheet>
   );
 }

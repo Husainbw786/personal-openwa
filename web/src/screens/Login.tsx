@@ -22,11 +22,11 @@ export default function Login({ onDone }: { onDone: () => void }) {
   }
 
   return (
-    <div className="flex min-h-full items-center justify-center bg-brand p-6">
-      <form onSubmit={submit} className="w-full max-w-sm rounded-2xl bg-white p-6 shadow-xl">
+    <div className="flex min-h-full flex-col items-center justify-center bg-brand p-6">
+      <form onSubmit={submit} className="w-full max-w-sm rounded-3xl bg-white p-7 shadow-xl">
         <img src="/icon.svg" alt="" className="mx-auto mb-3 h-14 w-14" />
         <h1 className="mb-1 text-center text-xl font-semibold">WA Sender</h1>
-        <p className="mb-5 text-center text-sm text-gray-500">Enter your password to continue</p>
+        <p className="mb-5 text-center text-sm text-muted">Enter your password to continue</p>
         <input
           type="password"
           autoFocus
@@ -34,7 +34,7 @@ export default function Login({ onDone }: { onDone: () => void }) {
           value={password}
           onChange={(e) => setPassword(e.target.value)}
           placeholder="Password"
-          className="mb-3 w-full rounded-xl border border-gray-300 px-4 py-3 outline-none focus:border-brand"
+          className="mb-3 w-full rounded-xl border border-gray-200 px-4 py-3 text-[15px] outline-none focus:border-send focus:ring-2 focus:ring-send/15"
         />
         {error && <p className="mb-3 text-sm text-red-700">{error}</p>}
         <Button type="submit" disabled={busy || !password} className="w-full py-3">

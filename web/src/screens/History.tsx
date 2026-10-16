@@ -1,7 +1,8 @@
 import { useState } from 'react';
 import { api, formatPhone, formatTime, type SendRow } from '../api';
 import { fromLabel, loadSessions, sessionTitle } from '../sessions';
-import { Empty, ErrorBox, Header, Spinner, StatusChip, useLoad } from '../ui';
+import { Avatar, Chip, Empty, ErrorBox, MainHeader, Spinner, StatusChip, useLoad } from '../ui';
+import { Bubble } from './Templates';
 
 const FILTERS = [
   ['', 'All'],
@@ -12,9 +13,10 @@ const FILTERS = [
   ['failed', 'Failed'],
 ] as const;
 
-export default function History() {
+export default function History({ route, navigate }: { route: string; navigate: (to: string) => void }) {
   const [status, setStatus] = useState('');
   const [query, setQuery] = useState('');
+  const [searchOpen, setSearchOpen] = useState(false);
   const [open, setOpen] = useState<number | null>(null);
   const [session, setSession] = useState('');
   const sessions = useLoad(loadSessions, []);
@@ -24,51 +26,58 @@ export default function History() {
 
   return (
     <>
-      <Header title="History" />
-      <div className="sticky top-14 z-10 space-y-2 bg-surface p-3">
-        <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search name, number or group" className="w-full rounded-xl border border-gray-200 bg-white px-4 py-2.5 text-sm outline-none focus:border-brand" />
-        <div className="flex gap-1.5 overflow-x-auto text-xs">
-          {FILTERS.map(([key, label]) => (
-            <button key={key} onClick={() => setStatus(key)} className={`shrink-0 rounded-full border px-3 py-1.5 ${status === key ? 'border-brand bg-brand text-white' : 'border-gray-200 bg-white text-gray-700'}`}>
-              {label}
-            </button>
+      <MainHeader
+        route={route}
+        navigate={navigate}
+        onSearch={() => setSearchOpen(true)}
+        search={searchOpen ? { value: query, onChange: setQuery, onClose: () => { setSearchOpen(false); setQuery(''); }, placeholder: 'Search name, number or group…' } : undefined}
+      />
+      <div className="no-scrollbar flex gap-2 overflow-x-auto px-4 py-2.5">
+        {FILTERS.map(([key, label]) => (
+          <Chip key={key} active={status === key} onClick={() => setStatus(key)}>{label}</Chip>
+        ))}
+      </div>
+      {multi && (
+        <div className="no-scrollbar flex gap-2 overflow-x-auto px-4 pb-2.5">
+          <Chip active={session === ''} onClick={() => setSession('')}>All numbers</Chip>
+          {sessions.data!.map((s) => (
+            <Chip key={s.id} active={session === s.id} onClick={() => setSession(s.id)}>From {s.pushName || sessionTitle(s)}</Chip>
           ))}
         </div>
-        {multi && (
-          <select value={session} onChange={(e) => setSession(e.target.value)} aria-label="Sent from" className="w-full rounded-xl border border-gray-200 bg-white px-3 py-2 text-xs outline-none focus:border-brand">
-            <option value="">From all numbers</option>
-            {sessions.data!.map((s) => <option key={s.id} value={s.id}>From {sessionTitle(s)}</option>)}
-          </select>
-        )}
-      </div>
+      )}
       {loading && !data && <Spinner />}
       {error && <ErrorBox message={error} retry={reload} />}
-      {data && data.length === 0 && <Empty>Nothing here yet.</Empty>}
-      <ul className="divide-y divide-gray-100 bg-white">
-        {data?.map((s) => (
-          <li key={s.id}>
-            <button onClick={() => setOpen(open === s.id ? null : s.id)} className="w-full px-4 py-3 text-left">
-              <div className="flex items-center gap-2">
-                <span className="min-w-0 flex-1 truncate font-medium">{s.name ?? formatPhone(s.phone)}</span>
-                <StatusChip status={s.status} />
-              </div>
-              <p className="truncate text-xs text-gray-500">
-                {s.template_name}{s.group_name ? ` · ${s.group_name}` : ''} · {formatTime(s.sent_at ?? s.created_at)}
-                {multi && fromLabel(sessions.data, s.session_id, s.from_phone) && ` · from ${fromLabel(sessions.data, s.session_id, s.from_phone)}`}
-              </p>
-              {open === s.id && (
-                <div className="mt-2 space-y-1 text-sm">
-                  <p className="text-xs text-gray-500">
-                    To {formatPhone(s.phone)}
-                    {fromLabel(sessions.data, s.session_id, s.from_phone) && ` · from ${fromLabel(sessions.data, s.session_id, s.from_phone)}`}
-                  </p>
-                  {s.text && <p className="whitespace-pre-wrap rounded-lg bg-[#dcf8c6] px-3 py-2">{s.text}</p>}
-                  {s.error && <p className="text-xs text-red-700">{s.error}</p>}
-                </div>
-              )}
-            </button>
-          </li>
-        ))}
+      {data && data.length === 0 && <Empty>Nothing here yet. Messages you send show up here with their delivery ticks.</Empty>}
+      <ul>
+        {data?.map((s) => {
+          const from = fromLabel(sessions.data, s.session_id, s.from_phone);
+          return (
+            <li key={s.id}>
+              <button onClick={() => setOpen(open === s.id ? null : s.id)} className="flex w-full items-start gap-4 py-2.5 pl-4 text-left hover:bg-panel" aria-expanded={open === s.id}>
+                <div className="pt-1"><Avatar label={s.name ?? '#'} kind="person" /></div>
+                <span className="min-w-0 flex-1 border-b border-gray-100 py-2 pr-4">
+                  <span className="flex items-baseline gap-2">
+                    <span className="min-w-0 flex-1 truncate text-[16px] font-medium">{s.name ?? formatPhone(s.phone)}</span>
+                    <span className="shrink-0 text-xs text-muted">{formatTime(s.sent_at ?? s.created_at)}</span>
+                  </span>
+                  <span className="flex items-center gap-2">
+                    <span className="min-w-0 flex-1 truncate text-sm text-muted">
+                      {s.template_name}{s.group_name ? ` · ${s.group_name}` : ''}{multi && from ? ` · from ${from}` : ''}
+                    </span>
+                    <StatusChip status={s.status} />
+                  </span>
+                  {open === s.id && (
+                    <span className="mt-2 block space-y-2 rounded-xl bg-wallpaper p-3">
+                      <span className="block text-xs text-muted">To {formatPhone(s.phone)}{from && ` · from ${from}`}</span>
+                      {s.text && <Bubble>{s.text}</Bubble>}
+                      {s.error && <span className="block text-xs text-red-700">{s.error}</span>}
+                    </span>
+                  )}
+                </span>
+              </button>
+            </li>
+          );
+        })}
       </ul>
     </>
   );
