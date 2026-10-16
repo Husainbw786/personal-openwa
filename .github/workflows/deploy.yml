@@ -1,0 +1,72 @@
+# Every push to main: type-check + build, then ship to the Google Cloud server and restart.
+# Secrets (Settings → Secrets and variables → Actions):
+#   DEPLOY_HOST         server IP
+#   DEPLOY_SSH_KEY      private key of the `deploy` user on the server
+#   DEPLOY_KNOWN_HOSTS  the server's SSH host key line (pins the server, prevents MITM)
+# Variable:
+#   APP_URL             e.g. https://34-56-155-51.sslip.io (used for the health check)
+# The server keeps its own .env (passwords, keys); it is never uploaded from here.
+
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Server type-check
+        working-directory: server
+        run: npm ci --no-fund --no-audit && npm run typecheck
+      - name: Web build
+        working-directory: web
+        run: npm ci --no-fund --no-audit && npm run build
+
+  deploy:
+    needs: check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.DEPLOY_SSH_KEY }}" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          echo "${{ secrets.DEPLOY_KNOWN_HOSTS }}" > ~/.ssh/known_hosts
+
+      - name: Upload code
+        run: |
+          rsync -az --delete \
+            --exclude .git --exclude .github --exclude node_modules --exclude dist --exclude data --exclude .env \
+            ./ deploy@${{ secrets.DEPLOY_HOST }}:/opt/wa-sender/
+
+      - name: Rebuild and restart
+        run: |
+          ssh deploy@${{ secrets.DEPLOY_HOST }} '
+            set -e
+            cd /opt/wa-sender
+            docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build --remove-orphans
+            docker image prune -f >/dev/null
+          '
+
+      - name: Health check
+        run: |
+          for i in $(seq 1 30); do
+            if curl -fsS "${{ vars.APP_URL }}/healthz"; then echo; echo "Deployed ✅"; exit 0; fi
+            sleep 5
+          done
+          echo "App did not become healthy" >&2
+          ssh deploy@${{ secrets.DEPLOY_HOST }} 'cd /opt/wa-sender && docker compose -f docker-compose.yml -f docker-compose.prod.yml logs --tail 50 wa-app'
+          exit 1

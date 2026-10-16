@@ -1,0 +1,28 @@
+# Server overlay: adds HTTPS in front of the app and stops exposing port 3000 directly.
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+# Needs DOMAIN in .env (e.g. 34-56-155-51.sslip.io, or your own domain pointing at the server).
+
+services:
+  wa-app:
+    ports: !reset []
+    mem_limit: 256m
+
+  openwa:
+    mem_limit: 700m
+
+  caddy:
+    image: caddy:2.10-alpine
+    restart: unless-stopped
+    depends_on:
+      - wa-app
+    environment:
+      DOMAIN: ${DOMAIN}
+    command: caddy reverse-proxy --from ${DOMAIN} --to wa-app:3000
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - caddy-data:/data
+
+volumes:
+  caddy-data:

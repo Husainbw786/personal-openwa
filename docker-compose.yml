@@ -1,0 +1,39 @@
+# Everything runs with:  docker compose up -d --build
+# Then open http://localhost:3000 (or http://<this-computer>:3000 from your phone on the same Wi-Fi / Tailscale).
+
+services:
+  openwa:
+    image: ghcr.io/rmyndharis/openwa:${OPENWA_VERSION:-0.24.0}
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      TZ: ${TZ_APP:-Asia/Kolkata}
+      ENGINE_TYPE: baileys                  # lightweight engine, no Chrome needed
+      API_MASTER_KEY: ${OPENWA_API_KEY}     # our app uses this key to talk to OpenWA
+      AUTO_START_SESSIONS: "true"           # reconnect WhatsApp automatically after a restart
+      BAILEYS_MARK_ONLINE_ON_CONNECT: "false" # keep notifications working on your phone
+      SEND_PACING_ENABLED: "true"           # OpenWA's own safety limits for new numbers / cold messages
+      SSRF_ALLOWED_HOSTS: wa-app            # allow delivery updates to our app on the internal network
+      CSP_UPGRADE_INSECURE_REQUESTS: "false"
+    volumes:
+      - openwa-data:/app/data               # WhatsApp login lives here: back this up
+    ports:
+      - "127.0.0.1:2785:2785"               # OpenWA's own dashboard, only reachable from this computer
+
+  wa-app:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      - openwa
+    env_file: .env
+    environment:
+      OPENWA_URL: http://openwa:2785
+      WEBHOOK_URL: http://wa-app:3000/hooks/openwa
+    volumes:
+      - app-data:/app/data                  # templates, send history, hidden numbers
+    ports:
+      - "3000:3000"
+
+volumes:
+  openwa-data:
+  app-data:
