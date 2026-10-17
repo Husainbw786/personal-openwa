@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { api, type Group, type WaSession } from '../api';
+import { readCache, writeCache } from '../cache';
 import { getViewSession, loadSessions, resolveSession, sessionTitle, setViewSession } from '../sessions';
 import { Avatar, Empty, ErrorBox, Fab, Icon, IconButton, MainHeader, SectionTitle, Spinner, toast, useLoad } from '../ui';
 
@@ -8,7 +9,7 @@ const MAX_SEARCH_RESULTS = 40;
 export default function Groups({ route, navigate }: { route: string; navigate: (to: string) => void }) {
   const [refresh, setRefresh] = useState(0);
   // Groups come from one number at a time; uploaded lists work with any number.
-  const sessions = useLoad(loadSessions, []);
+  const sessions = useLoad(loadSessions, [], { cache: 'sessions' });
   const [stored, setStored] = useState(getViewSession);
   const view = resolveSession(sessions.data, stored);
   const viewId = view?.id ?? stored ?? '';
@@ -16,15 +17,22 @@ export default function Groups({ route, navigate }: { route: string; navigate: (
   const groups = useLoad(
     () => api<Group[]>(`/api/groups?${[sessionQs, refresh ? 'refresh=1' : ''].filter(Boolean).join('&')}`),
     [refresh, viewId],
+    { cache: viewId ? `groups:${viewId}` : null },
   );
   const [searchOpen, setSearchOpen] = useState(false);
   const [query, setQuery] = useState('');
-  const [counts, setCounts] = useState<Record<string, number | null>>({});
+  const [counts, setCountsState] = useState<Record<string, number | null>>(() => readCache(`counts:${viewId}`) ?? {});
+  const setCounts = (update: Record<string, number | null> | ((prev: Record<string, number | null>) => Record<string, number | null>)) =>
+    setCountsState((prev) => {
+      const next = typeof update === 'function' ? update(prev) : update;
+      writeCache(`counts:${viewId}`, next);
+      return next;
+    });
 
   function pickNumber(id: string) {
     setViewSession(id);
     setStored(id);
-    setCounts({});
+    setCountsState(readCache(`counts:${id}`) ?? {});
   }
 
   const all = groups.data ?? [];

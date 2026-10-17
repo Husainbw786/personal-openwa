@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import QueueBar from './screens/QueueBar';
+import { readCache, writeCache } from './cache';
 
 /** Tiny hash router: #/groups, #/groups/<id>, #/templates ... works on any static host. */
 export function useRoute(): [string, (to: string) => void] {
@@ -15,35 +16,63 @@ export function useRoute(): [string, (to: string) => void] {
   return [route, navigate];
 }
 
-/** Load data, with a reload function and optional polling. */
-export function useLoad<T>(load: () => Promise<T>, deps: unknown[], pollMs?: number) {
-  const [data, setData] = useState<T | null>(null);
+/**
+ * Load data, with a reload function and optional polling. With `cache`, the last result is shown
+ * straight away from the phone's storage and quietly replaced once the network answers.
+ */
+export function useLoad<T>(load: () => Promise<T>, deps: unknown[], options?: number | { poll?: number; cache?: string | null }) {
+  const pollMs = typeof options === 'number' ? options : options?.poll;
+  const cacheKey = typeof options === 'object' ? options.cache ?? null : null;
+  const [data, setData] = useState<T | null>(() => (cacheKey ? readCache<T>(cacheKey) : null));
   const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(() => !(cacheKey && readCache(cacheKey) !== null));
   const loadRef = useRef(load);
   loadRef.current = load;
+  const keyRef = useRef(cacheKey);
+  keyRef.current = cacheKey;
 
   const reload = useCallback(async () => {
+    const key = keyRef.current;
     try {
-      setData(await loadRef.current());
+      const fresh = await loadRef.current();
+      if (key !== keyRef.current) return; // the screen moved on (e.g. switched number) meanwhile
+      setData(fresh);
       setError(null);
+      if (key) writeCache(key, fresh);
     } catch (err) {
+      if (key !== keyRef.current) return;
       setError(err instanceof Error ? err.message : String(err));
     } finally {
-      setLoading(false);
+      if (key === keyRef.current) setLoading(false);
     }
   }, []);
 
+  const firstRun = useRef(true);
   useEffect(() => {
-    setLoading(true);
+    // On a change of what we load (not the first render), show that thing's cached copy, if any.
+    if (!firstRun.current) {
+      const cached = cacheKey ? readCache<T>(cacheKey) : null;
+      setData(cached);
+      setLoading(cached === null);
+      setError(null);
+    }
+    firstRun.current = false;
     void reload();
     if (!pollMs) return;
     const timer = setInterval(() => void reload(), pollMs);
     return () => clearInterval(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, deps);
+  }, [...deps, cacheKey]);
 
-  return { data, error, loading, reload, setData };
+  const set = useCallback((update: T | null | ((prev: T | null) => T | null)) => {
+    setData((prev) => {
+      const next = typeof update === 'function' ? (update as (p: T | null) => T | null)(prev) : update;
+      if (keyRef.current && next !== null) writeCache(keyRef.current, next);
+      return next;
+    });
+  }, []);
+
+  return { data, error, loading, reload, setData: set };
 }
 
 const ICONS = {

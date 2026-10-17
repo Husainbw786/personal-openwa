@@ -4,7 +4,7 @@ import { Avatar, Button, Empty, ErrorBox, Fab, Field, Icon, MainHeader, Sheet, S
 
 /** Uploaded CSV lists: they work like a group and can be sent from any number. */
 export default function Lists({ route, navigate }: { route: string; navigate: (to: string) => void }) {
-  const lists = useLoad(() => api<ContactList[]>('/api/lists'), []);
+  const lists = useLoad(() => api<ContactList[]>('/api/lists'), [], { cache: 'lists' });
   const [uploadOpen, setUploadOpen] = useState(false);
 
   return (

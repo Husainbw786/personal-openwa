@@ -21,8 +21,8 @@ function formatWait(s: number) {
 }
 
 export default function QueueBar() {
-  const wa = useLoad(loadSessions, [], 15_000);
-  const queue = useLoad(() => api<QueueState>('/api/queue'), [], 5_000);
+  const wa = useLoad(loadSessions, [], { poll: 15_000, cache: 'sessions' });
+  const queue = useLoad(() => api<QueueState>('/api/queue'), [], { poll: 5_000, cache: 'queue' });
   const [, tick] = useState(0);
   useEffect(() => {
     const t = setInterval(() => tick((n) => n + 1), 1000);

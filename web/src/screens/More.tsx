@@ -1,12 +1,13 @@
 import { useState } from 'react';
 import { api, formatPhone, formatTime, type Excluded, type QueueState } from '../api';
+import { clearCache } from '../cache';
 import { loadSessions, sessionTitle } from '../sessions';
 import { Button, Header, Icon, inputClass, toast, useLoad } from '../ui';
 
 export default function More({ navigate, onLogout }: { navigate: (to: string) => void; onLogout: () => void }) {
-  const excluded = useLoad(() => api<Excluded[]>('/api/excluded'), []);
-  const queue = useLoad(() => api<QueueState>('/api/queue'), []);
-  const sessions = useLoad(loadSessions, []);
+  const excluded = useLoad(() => api<Excluded[]>('/api/excluded'), [], { cache: 'excluded' });
+  const queue = useLoad(() => api<QueueState>('/api/queue'), [], { cache: 'queue' });
+  const sessions = useLoad(loadSessions, [], { cache: 'sessions' });
   const [phone, setPhone] = useState('');
   const [note, setNote] = useState('');
 
@@ -38,6 +39,7 @@ export default function More({ navigate, onLogout }: { navigate: (to: string) =>
 
   async function logout() {
     await api('/api/logout', { method: 'POST' });
+    clearCache();
     onLogout();
   }
 

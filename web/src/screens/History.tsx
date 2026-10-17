@@ -19,9 +19,9 @@ export default function History({ route, navigate }: { route: string; navigate: 
   const [searchOpen, setSearchOpen] = useState(false);
   const [open, setOpen] = useState<number | null>(null);
   const [session, setSession] = useState('');
-  const sessions = useLoad(loadSessions, []);
+  const sessions = useLoad(loadSessions, [], { cache: 'sessions' });
   const params = new URLSearchParams({ limit: '100', ...(status ? { status } : {}), ...(query ? { q: query } : {}), ...(session ? { session } : {}) });
-  const { data, error, loading, reload } = useLoad(() => api<SendRow[]>(`/api/sends?${params}`), [status, query, session], 10_000);
+  const { data, error, loading, reload } = useLoad(() => api<SendRow[]>(`/api/sends?${params}`), [status, query, session], { poll: 10_000, cache: query ? null : `sends:${status}:${session}` });
   const multi = (sessions.data?.length ?? 0) > 1;
 
   return (

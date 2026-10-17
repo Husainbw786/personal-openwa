@@ -5,7 +5,7 @@ import { Avatar, Button, ErrorBox, Field, Header, Icon, Sheet, Spinner, inputCla
 
 /** One card per linked WhatsApp number, plus a way to link another. */
 export default function Connect({ navigate }: { navigate: (to: string) => void }) {
-  const { data, error, reload } = useLoad(loadSessions, [], 3_000);
+  const { data, error, reload } = useLoad(loadSessions, [], { poll: 3_000, cache: 'sessions' });
   const [busy, setBusy] = useState(false);
   const [addOpen, setAddOpen] = useState(false);
   const [label, setLabel] = useState('');

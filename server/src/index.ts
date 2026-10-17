@@ -1,8 +1,9 @@
 import Fastify, { type FastifyRequest } from 'fastify';
 import cookie from '@fastify/cookie';
 import fastifyStatic from '@fastify/static';
+import compress from '@fastify/compress';
 import { existsSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { resolve, sep } from 'node:path';
 import { config } from './config.ts';
 import { db } from './db.ts';
 import { authRoutes, requireLogin } from './auth.ts';
@@ -28,6 +29,8 @@ app.addContentTypeParser('application/json', { parseAs: 'string' }, (req, body, 
 });
 
 await app.register(cookie, { secret: config.cookieSecret });
+// Phones on mobile data: the app bundle and big group lists shrink ~4x.
+await app.register(compress, { threshold: 1024, encodings: ['br', 'gzip'] });
 
 app.addHook('onRequest', async (req, reply) => {
   const url = req.url.split('?')[0];
@@ -61,7 +64,18 @@ app.get('/healthz', async () => ({ ok: true }));
 // Serve the built frontend (single-page app) when it exists.
 const webDist = resolve(config.webDist);
 if (existsSync(webDist)) {
-  await app.register(fastifyStatic, { root: webDist, wildcard: false });
+  await app.register(fastifyStatic, {
+    root: webDist,
+    wildcard: false,
+    // Built files have a content hash in their name and never change; the page and the
+    // service worker must always be re-checked so updates reach phones.
+    cacheControl: false,
+    setHeaders: (res, path) => {
+      if (path.includes(`${sep}assets${sep}`)) res.header('Cache-Control', 'public, max-age=31536000, immutable');
+      else if (path.endsWith('.html') || path.endsWith('sw.js')) res.header('Cache-Control', 'no-cache');
+      else res.header('Cache-Control', 'public, max-age=86400');
+    },
+  });
   app.setNotFoundHandler((req, reply) => {
     if (req.url.startsWith('/api/') || req.url.startsWith('/hooks/')) return reply.code(404).send({ message: 'Not found' });
     return reply.sendFile('index.html');

@@ -10,14 +10,14 @@ const MAX_BATCH = 10;
 export type Source = { kind: 'group'; id: string } | { kind: 'list'; id: number };
 
 export default function GroupDetail({ source, navigate }: { source: Source; navigate: (to: string) => void }) {
-  const templates = useLoad(() => api<Template[]>('/api/templates'), []);
+  const templates = useLoad(() => api<Template[]>('/api/templates'), [], { cache: 'templates' });
   const active = (templates.data ?? []).filter((t) => !t.archived);
   const [templateId, setTemplateId] = useState<number | null>(() => Number(localStorage.getItem('lastTemplateId')) || null);
   const template = active.find((t) => t.id === templateId) ?? null;
 
   // A group is read through the number it was opened from (home screen); a list needs no number.
   // Either can be sent from any linked number.
-  const sessions = useLoad(loadSessions, []);
+  const sessions = useLoad(loadSessions, [], { cache: 'sessions' });
   const [viewStored] = useState(getViewSession);
   const viewId = resolveSession(sessions.data, viewStored)?.id ?? viewStored ?? '';
   const [sendStored, setSendStored] = useState(() => (source.kind === 'list' ? getSendSession() ?? viewStored : viewStored));
@@ -38,6 +38,7 @@ export default function GroupDetail({ source, navigate }: { source: Source; navi
   const group = useLoad(
     () => api<Detail>(`${basePath}${qs(template ? { templateId: String(template.id) } : {})}`),
     [basePath, template?.id, source.kind === 'group' ? viewId : ''],
+    { cache: `members:${basePath}|${source.kind === 'group' ? viewId : ''}|${template?.id ?? ''}` },
   );
 
   const [menuOpen, setMenuOpen] = useState(false);

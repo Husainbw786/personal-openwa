@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react';
 import { api, setUnauthorizedHandler } from './api';
+import { clearCache } from './cache';
 import { Spinner, ToastHost, useRoute } from './ui';
+import UpdateBanner from './screens/UpdateBanner';
 import Login from './screens/Login';
 import Connect from './screens/Connect';
 import Groups from './screens/Groups';
@@ -11,12 +13,21 @@ import History from './screens/History';
 import More from './screens/More';
 
 export default function App() {
-  const [loggedIn, setLoggedIn] = useState<boolean | null>(null);
+  // Open straight into the app if you were logged in last time; the server still checks every call.
+  const [loggedIn, setLoggedInState] = useState<boolean | null>(() => (rememberedLogin() ? true : null));
   const [route, navigate] = useRoute();
+
+  function setLoggedIn(value: boolean) {
+    setLoggedInState(value);
+    try { localStorage.setItem('wa-loggedIn', value ? '1' : '0'); } catch { /* private mode */ }
+    if (!value) clearCache();
+  }
 
   useEffect(() => {
     setUnauthorizedHandler(() => setLoggedIn(false));
-    api<{ loggedIn: boolean }>('/api/me').then((r) => setLoggedIn(r.loggedIn)).catch(() => setLoggedIn(false));
+    api<{ loggedIn: boolean }>('/api/me')
+      .then((r) => setLoggedIn(r.loggedIn))
+      .catch(() => { if (!rememberedLogin()) setLoggedIn(false); }); // offline: keep showing the cached app
   }, []);
 
   if (loggedIn === null) return <Spinner />;
@@ -35,7 +46,12 @@ export default function App() {
   return (
     <div className="mx-auto flex min-h-full max-w-2xl flex-col bg-white shadow-sm">
       <main className="flex-1 pb-24">{screen}</main>
+      <UpdateBanner />
       <ToastHost />
     </div>
   );
+}
+
+function rememberedLogin(): boolean {
+  try { return localStorage.getItem('wa-loggedIn') === '1'; } catch { return false; }
 }

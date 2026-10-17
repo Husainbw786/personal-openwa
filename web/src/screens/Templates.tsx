@@ -13,7 +13,7 @@ interface Draft {
 const EMPTY: Draft = { name: '', body: 'Hi {first}, ', fallback: 'there', archived: false };
 
 export default function Templates({ route, navigate }: { route: string; navigate: (to: string) => void }) {
-  const { data, error, loading, reload } = useLoad(() => api<Template[]>('/api/templates'), []);
+  const { data, error, loading, reload } = useLoad(() => api<Template[]>('/api/templates'), [], { cache: 'templates' });
   const [draft, setDraft] = useState<Draft | null>(null);
   const [saving, setSaving] = useState(false);
 
