@@ -41,10 +41,16 @@ export default function Groups({ route, navigate }: { route: string; navigate: (
   const results = searching ? all.filter((g) => g.name.toLowerCase().includes(query.trim().toLowerCase())).slice(0, MAX_SEARCH_RESULTS) : [];
   const visible = searching ? results : starred;
 
-  // Fetch member counts only for the groups on screen.
+  // Counts normally arrive with the group list (server keeps them warm); fetch only any still missing.
+  useEffect(() => {
+    const fromList = Object.fromEntries(all.filter((g) => g.count != null).map((g) => [g.id, g.count as number]));
+    if (Object.keys(fromList).some((id) => counts[id] !== fromList[id])) setCounts((prev) => ({ ...prev, ...fromList }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [groups.data]);
+
   const visibleKey = visible.map((g) => g.id).join('|');
   useEffect(() => {
-    const missing = visible.map((g) => g.id).filter((id) => !(id in counts));
+    const missing = visible.filter((g) => g.count == null).map((g) => g.id).filter((id) => !(id in counts));
     if (missing.length === 0) return;
     const timer = setTimeout(() => {
       api<Record<string, number | null>>(`/api/groups/counts?${sessionQs}`, { method: 'POST', body: { ids: missing } })

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { api, setUnauthorizedHandler } from './api';
 import { clearCache } from './cache';
+import { preloadEverything } from './preload';
 import { Spinner, ToastHost, useRoute } from './ui';
 import UpdateBanner from './screens/UpdateBanner';
 import Login from './screens/Login';
@@ -29,6 +30,15 @@ export default function App() {
       .then((r) => setLoggedIn(r.loggedIn))
       .catch(() => { if (!rememberedLogin()) setLoggedIn(false); }); // offline: keep showing the cached app
   }, []);
+
+  // Once logged in, quietly preload what you're likely to open next (and again when you come back).
+  useEffect(() => {
+    if (!loggedIn) return;
+    void preloadEverything();
+    const onVisible = () => { if (document.visibilityState === 'visible') void preloadEverything(); };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => document.removeEventListener('visibilitychange', onVisible);
+  }, [loggedIn]);
 
   if (loggedIn === null) return <Spinner />;
   if (!loggedIn) return <Login onDone={() => setLoggedIn(true)} />;

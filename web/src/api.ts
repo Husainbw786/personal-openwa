@@ -53,6 +53,8 @@ export interface Group {
   id: string;
   name: string;
   favorite: boolean;
+  /** Member count from the server's warm cache (null until it has loaded that group). */
+  count?: number | null;
 }
 
 export interface Member {

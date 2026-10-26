@@ -1,5 +1,5 @@
 import { db } from './db.ts';
-import { openwa } from './openwa.ts';
+import { openwa, type GroupSummary } from './openwa.ts';
 import { normalizePhone, isValidPhone, normalizeRecipient, isValidRecipient } from './phone.ts';
 
 /** A person we can message, before annotating with send status. Shared by WhatsApp groups and uploaded lists. */
@@ -16,21 +16,53 @@ export interface Member extends RawMember {
   selectable: boolean;
 }
 
-const CACHE_MS = 5 * 60 * 1000;
+/**
+ * Everything WhatsApp-side is cached and served instantly ("stale while revalidate"): a request gets
+ * whatever is in memory right away, and if it's older than REFRESH_MS a background refresh starts.
+ * Only data that has never been loaded makes a request wait. The warmer (warmer.ts) keeps every
+ * number's groups, members and contacts fresh around the clock, and snapshots survive restarts.
+ */
+export const REFRESH_MS = 2 * 60 * 1000;
+
+const inflight = new Map<string, Promise<unknown>>();
+/** Run `fn` once per key at a time; concurrent callers share the same promise. */
+function once<T>(key: string, fn: () => Promise<T>): Promise<T> {
+  const running = inflight.get(key) as Promise<T> | undefined;
+  if (running) return running;
+  const p = fn().finally(() => inflight.delete(key));
+  inflight.set(key, p);
+  return p;
+}
+
+interface Cached<T> { at: number; value: T }
+
+/** Serve from cache; refresh in the background when stale; wait only when nothing is cached (or `fresh`). */
+async function swr<T>(name: string, cache: Map<string, Cached<T>>, key: string, load: () => Promise<T>, fresh = false): Promise<T> {
+  const hit = cache.get(key);
+  const refresh = () => once(`${name}:${key}`, async () => {
+    const value = await load();
+    cache.set(key, { at: Date.now(), value });
+    return value;
+  });
+  if (hit && !fresh) {
+    if (Date.now() - hit.at > REFRESH_MS) refresh().catch(() => {});
+    return hit.value;
+  }
+  return refresh();
+}
 
 /** Names from each number's WhatsApp address book, keyed by phone digits and by raw id. */
-const contactCache = new Map<string, { at: number; names: Map<string, string> }>();
-async function getContactNames(sessionId: string): Promise<Map<string, string>> {
-  const cached = contactCache.get(sessionId);
-  if (cached && Date.now() - cached.at < CACHE_MS) return cached.names;
-  const names = new Map<string, string>();
-  for (const c of await openwa.listContacts(sessionId).catch(() => [])) {
-    if (!c.name) continue;
-    names.set(c.id, c.name);
-    if (c.id.endsWith('@c.us') && c.number) names.set(normalizePhone(c.number), c.name);
-  }
-  contactCache.set(sessionId, { at: Date.now(), names });
-  return names;
+const contactCache = new Map<string, Cached<Map<string, string>>>();
+export function getContactNames(sessionId: string, fresh = false): Promise<Map<string, string>> {
+  return swr('contacts', contactCache, sessionId, async () => {
+    const names = new Map<string, string>();
+    for (const c of await openwa.listContacts(sessionId)) {
+      if (!c.name) continue;
+      names.set(c.id, c.name);
+      if (c.id.endsWith('@c.us') && c.number) names.set(normalizePhone(c.number), c.name);
+    }
+    return names;
+  }, fresh).catch(() => new Map<string, string>());
 }
 
 /**
@@ -66,38 +98,39 @@ export async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T) =>
   return out;
 }
 
-const selfCache = new Map<string, { at: number; phone: string | null }>();
-async function selfPhone(sessionId: string): Promise<string | null> {
-  const cached = selfCache.get(sessionId);
-  if (cached && Date.now() - cached.at < CACHE_MS) return cached.phone;
-  const session = await openwa.getSession(sessionId);
-  const phone = session.phone ? normalizePhone(session.phone) : null;
-  selfCache.set(sessionId, { at: Date.now(), phone });
-  return phone;
+const selfCache = new Map<string, Cached<string | null>>();
+function selfPhone(sessionId: string): Promise<string | null> {
+  return swr('self', selfCache, sessionId, async () => {
+    const session = await openwa.getSession(sessionId);
+    return session.phone ? normalizePhone(session.phone) : null;
+  });
 }
 
 /** Group data is per number: the same group looks the same, but a number only sees groups it is in. */
 const cacheKey = (sessionId: string, groupId: string) => `${sessionId}|${groupId}`;
 
-/** Member count per group, filled whenever we load a group. */
-export const groupCounts = new Map<string, { at: number; count: number }>();
+/** Each number's list of groups. */
+const groupListCache = new Map<string, Cached<GroupSummary[]>>();
+export function getGroupList(sessionId: string, fresh = false): Promise<GroupSummary[]> {
+  return swr('groups', groupListCache, sessionId, () => openwa.listGroups(sessionId), fresh);
+}
 
-const groupMemberCache = new Map<string, { at: number; name: string; description: string; members: RawMember[] }>();
+export interface GroupData { name: string; description: string; members: RawMember[] }
+const groupMemberCache = new Map<string, Cached<GroupData>>();
+
+/** Member count per group, from the last member load (or a cheap participant count). */
+export const groupCounts = new Map<string, Cached<number>>();
 
 /** Forget everything cached for a number (after it logs out or is removed). */
 export function forgetSession(sessionId: string): void {
-  contactCache.delete(sessionId);
-  selfCache.delete(sessionId);
-  for (const map of [groupCounts, groupMemberCache]) {
+  for (const map of [contactCache, selfCache, groupListCache] as Array<Map<string, unknown>>) map.delete(sessionId);
+  for (const map of [groupCounts, groupMemberCache] as Array<Map<string, unknown>>) {
     for (const key of map.keys()) if (key.startsWith(`${sessionId}|`)) map.delete(key);
   }
+  db.prepare('DELETE FROM cache_snapshot WHERE key LIKE ?').run(`%:${sessionId}%`);
 }
 
-export async function loadGroupMembers(sessionId: string, groupId: string, fresh = false) {
-  const key = cacheKey(sessionId, groupId);
-  const cached = groupMemberCache.get(key);
-  if (!fresh && cached && Date.now() - cached.at < CACHE_MS) return cached;
-
+async function fetchGroup(sessionId: string, groupId: string): Promise<GroupData> {
   const [group, self, contactNames] = await Promise.all([openwa.getGroup(sessionId, groupId), selfPhone(sessionId), getContactNames(sessionId)]);
   const keys = await mapLimit(group.participants, 16, (p) => recipientKey(sessionId, p.id, p.number));
   const members: RawMember[] = [];
@@ -106,21 +139,63 @@ export async function loadGroupMembers(sessionId: string, groupId: string, fresh
     if (!phone || phone === self) continue;
     members.push({ phone, whatsappName: p.name ?? contactNames.get(phone) ?? contactNames.get(p.id) ?? null, isAdmin: p.isAdmin });
   }
-  const entry = { at: Date.now(), name: group.name, description: group.description ?? '', members };
-  groupMemberCache.set(key, entry);
-  groupCounts.set(key, { at: Date.now(), count: members.length });
-  return entry;
+  groupCounts.set(cacheKey(sessionId, groupId), { at: Date.now(), value: members.length });
+  return { name: group.name, description: group.description ?? '', members };
 }
 
-/** Just the member count, without resolving hidden numbers (cheap, used by the groups list). */
+export function loadGroupMembers(sessionId: string, groupId: string, fresh = false): Promise<GroupData> {
+  return swr('members', groupMemberCache, cacheKey(sessionId, groupId), () => fetchGroup(sessionId, groupId), fresh);
+}
+
+/** Member count without waiting: from cache, else a cheap participant count. */
 export async function groupCount(sessionId: string, groupId: string): Promise<number> {
-  const key = cacheKey(sessionId, groupId);
-  const cached = groupCounts.get(key);
-  if (cached && Date.now() - cached.at < CACHE_MS) return cached.count;
+  const cached = groupCounts.get(cacheKey(sessionId, groupId));
+  if (cached) return cached.value;
   const group = await openwa.getGroup(sessionId, groupId);
   const count = Math.max(0, group.participants.length - 1); // minus you
-  groupCounts.set(key, { at: Date.now(), count });
+  groupCounts.set(cacheKey(sessionId, groupId), { at: Date.now(), value: count });
   return count;
+}
+
+export function cachedCount(sessionId: string, groupId: string): number | null {
+  return groupCounts.get(cacheKey(sessionId, groupId))?.value ?? null;
+}
+
+/** Is this number's data fully loaded (used by the warmer and the status endpoint)? */
+export function warmedGroups(sessionId: string): number {
+  let n = 0;
+  for (const key of groupMemberCache.keys()) if (key.startsWith(`${sessionId}|`)) n++;
+  return n;
+}
+
+// --- Snapshots: keep the warm cache across restarts, so the first open after a deploy is instant too.
+
+export function saveSnapshot(sessionId: string): void {
+  const groups = groupListCache.get(sessionId);
+  if (!groups) return;
+  const members: Record<string, Cached<GroupData>> = {};
+  for (const [key, value] of groupMemberCache) if (key.startsWith(`${sessionId}|`)) members[key] = value;
+  const upsert = db.prepare('INSERT INTO cache_snapshot (key, value, at) VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value, at = excluded.at');
+  upsert.run(`groups:${sessionId}`, JSON.stringify(groups), Date.now());
+  upsert.run(`members:${sessionId}`, JSON.stringify(members), Date.now());
+}
+
+export function loadSnapshots(): number {
+  let loaded = 0;
+  for (const row of db.prepare('SELECT key, value FROM cache_snapshot').all() as Array<{ key: string; value: string }>) {
+    try {
+      if (row.key.startsWith('groups:')) {
+        groupListCache.set(row.key.slice('groups:'.length), JSON.parse(row.value));
+      } else if (row.key.startsWith('members:')) {
+        for (const [key, entry] of Object.entries(JSON.parse(row.value) as Record<string, Cached<GroupData>>)) {
+          groupMemberCache.set(key, entry);
+          groupCounts.set(key, { at: entry.at, value: entry.value.members.length });
+          loaded++;
+        }
+      }
+    } catch { /* corrupt snapshot: ignore, the warmer refills it */ }
+  }
+  return loaded;
 }
 
 /** Mark who is hidden, who already got the selected template, and who can be picked. */

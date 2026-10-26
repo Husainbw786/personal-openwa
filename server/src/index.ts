@@ -9,6 +9,8 @@ import { db } from './db.ts';
 import { authRoutes, requireLogin } from './auth.ts';
 import { ensureSession, openwa, OpenWAError } from './openwa.ts';
 import { startWorker } from './queue.ts';
+import { startWarmer } from './warmer.ts';
+import { loadSnapshots } from './members.ts';
 import { waRoutes } from './routes/wa.ts';
 import { templateRoutes } from './routes/templates.ts';
 import { sendRoutes } from './routes/sends.ts';
@@ -82,6 +84,9 @@ if (existsSync(webDist)) {
   });
 }
 
+// Restore the warm cache from the last run before accepting requests, so the first open is instant.
+app.log.info(`restored ${loadSnapshots()} cached groups from snapshot`);
+
 await app.listen({ port: config.port, host: config.host });
 
 // Connect to OpenWA in the background; retry until it's up so boot order doesn't matter.
@@ -98,6 +103,7 @@ await app.listen({ port: config.port, host: config.host });
       await registerWebhook(session.id, { info: (m) => app.log.info(m), warn: (o, m) => app.log.warn(o, m) });
     }
     startWorker({ info: (o, m) => app.log.info(o, m), warn: (o, m) => app.log.warn(o, m) });
+    startWarmer({ info: (o, m) => app.log.info(o, m), warn: (o, m) => app.log.warn(o, m) });
   } catch (err) {
     const delay = Math.min(attempt * 2000, 30_000);
     app.log.warn({ err: String(err) }, `OpenWA not ready, retrying in ${delay / 1000}s`);

@@ -74,6 +74,13 @@ db.exec(`
     PRIMARY KEY (list_id, phone)
   );
 
+  -- Warm-cache snapshots (groups and members per number) so the app is instant right after a restart.
+  CREATE TABLE IF NOT EXISTS cache_snapshot (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL,
+    at    INTEGER NOT NULL
+  );
+
   CREATE TABLE IF NOT EXISTS settings (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL

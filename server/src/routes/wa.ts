@@ -1,13 +1,11 @@
 import type { FastifyInstance } from 'fastify';
 import { db } from '../db.ts';
-import { defaultSessionId, forgetDefaultSession, openwa, OpenWAError, setDefaultSession, type GroupSummary, type Session } from '../openwa.ts';
-import { annotate, forgetSession, groupCount, loadGroupMembers, mapLimit } from '../members.ts';
+import { defaultSessionId, forgetDefaultSession, openwa, OpenWAError, setDefaultSession, type Session } from '../openwa.ts';
+import { annotate, cachedCount, forgetSession, getGroupList, groupCount, loadGroupMembers, mapLimit } from '../members.ts';
 import { sendCsv, sendPdf, toRows } from '../export.ts';
 import { registerWebhook } from './hooks.ts';
 import { sessionLabel } from '../queue.ts';
 
-const groupCache = new Map<string, { at: number; groups: GroupSummary[] }>();
-const GROUP_CACHE_MS = 5 * 60 * 1000;
 
 /** Which linked number a request is about: `?session=<id>`, or the default number. */
 async function pickSession(query: { session?: string }): Promise<string> {
@@ -68,14 +66,12 @@ export function waRoutes(app: FastifyInstance): void {
 
   app.post<{ Params: { id: string } }>('/api/wa/sessions/:id/logout', async (req) => {
     await openwa.logout(req.params.id);
-    groupCache.delete(req.params.id);
     forgetSession(req.params.id);
     return { ok: true };
   });
 
   app.post<{ Params: { id: string } }>('/api/wa/sessions/:id/restart', async (req) => {
     await openwa.restart(req.params.id);
-    groupCache.delete(req.params.id);
     forgetSession(req.params.id);
     return { ok: true };
   });
@@ -97,7 +93,6 @@ export function waRoutes(app: FastifyInstance): void {
       if (!(err instanceof OpenWAError && err.status === 404)) throw err;
     });
     db.prepare(`UPDATE sends SET status = 'cancelled', error = 'The sending number was removed' WHERE session_id = ? AND status = 'queued'`).run(id);
-    groupCache.delete(id);
     forgetSession(id);
     forgetDefaultSession(id);
     const newDefault = await defaultSessionId();
@@ -117,14 +112,11 @@ export function waRoutes(app: FastifyInstance): void {
 
   app.get<{ Querystring: { refresh?: string; session?: string } }>('/api/groups', async (req) => {
     const sessionId = await pickSession(req.query);
-    let cached = groupCache.get(sessionId);
-    if (!cached || req.query.refresh === '1' || Date.now() - cached.at > GROUP_CACHE_MS) {
-      cached = { at: Date.now(), groups: await openwa.listGroups(sessionId) };
-      groupCache.set(sessionId, cached);
-    }
+    const groups = await getGroupList(sessionId, req.query.refresh === '1');
     const favorites = new Set((db.prepare('SELECT group_id FROM favorite_groups').all() as Array<{ group_id: string }>).map((r) => r.group_id));
-    return cached.groups
-      .map((g) => ({ id: g.id, name: g.name, favorite: favorites.has(g.id) }))
+    // Counts come straight from the warm cache, so the home screen needs no second request.
+    return groups
+      .map((g) => ({ id: g.id, name: g.name, favorite: favorites.has(g.id), count: cachedCount(sessionId, g.id) }))
       .sort((a, b) => Number(b.favorite) - Number(a.favorite) || a.name.localeCompare(b.name));
   });
 
