@@ -4,8 +4,6 @@ import { readCache, writeCache } from '../cache';
 import { getViewSession, loadSessions, resolveSession, sessionTitle, setViewSession } from '../sessions';
 import { Avatar, Empty, ErrorBox, Fab, Icon, IconButton, MainHeader, SectionTitle, Spinner, toast, useLoad } from '../ui';
 
-const MAX_SEARCH_RESULTS = 40;
-
 export default function Groups({ route, navigate }: { route: string; navigate: (to: string) => void }) {
   const [refresh, setRefresh] = useState(0);
   // Groups come from one number at a time; uploaded lists work with any number.
@@ -38,8 +36,10 @@ export default function Groups({ route, navigate }: { route: string; navigate: (
   const all = groups.data ?? [];
   const searching = searchOpen && query.trim().length > 0;
   const starred = all.filter((g) => g.favorite);
-  const results = searching ? all.filter((g) => g.name.toLowerCase().includes(query.trim().toLowerCase())).slice(0, MAX_SEARCH_RESULTS) : [];
-  const visible = searching ? results : starred;
+  const results = searching ? all.filter((g) => g.name.toLowerCase().includes(query.trim().toLowerCase())) : [];
+  // Default view: starred first, then every other group A-Z.
+  const others = all.filter((g) => !g.favorite).sort((a, b) => a.name.localeCompare(b.name));
+  const visible = searching ? results : [...starred, ...others];
 
   // Counts normally arrive with the group list (server keeps them warm); fetch only any still missing.
   useEffect(() => {
@@ -81,17 +81,12 @@ export default function Groups({ route, navigate }: { route: string; navigate: (
         extra={sessions.data && <NumberSwitcher sessions={sessions.data} activeId={view?.id} onPick={pickNumber} navigate={navigate} />}
       />
 
-      {searchOpen && !searching && (
-        <p className="px-6 py-10 text-center text-sm text-muted">Type a group name. Tap ☆ on a result to keep it on this screen.</p>
-      )}
-
       {searching ? (
         <>
           {results.length === 0 && groups.data && <Empty>No group matches “{query}”.</Empty>}
           <GroupList groups={results} counts={counts} navigate={navigate} onStar={toggleFavorite} />
-          {results.length === MAX_SEARCH_RESULTS && <p className="px-4 py-3 text-center text-xs text-muted">Showing the first {MAX_SEARCH_RESULTS}. Keep typing to narrow it down.</p>}
         </>
-      ) : !searchOpen && (
+      ) : (
         <>
           {groups.loading && !groups.data && <Spinner />}
           {notConnected && (
@@ -102,24 +97,18 @@ export default function Groups({ route, navigate }: { route: string; navigate: (
             </Empty>
           )}
           {groups.error && !notConnected && <ErrorBox message={groups.error} retry={groups.reload} />}
-          {groups.data && (
-            starred.length === 0 ? (
-              <Empty>
-                <span className="mx-auto mb-3 flex h-16 w-16 items-center justify-center rounded-full bg-bubble text-send"><Icon name="star" size={30} /></span>
-                <span className="block text-base font-medium text-ink">Star the groups you message</span>
-                Search your {all.length} groups and tap ☆ to pin them here.
-                <span className="mt-4 block"><button onClick={openSearch} className="rounded-full bg-send px-5 py-2.5 text-sm font-semibold text-white">Find a group</button></span>
-              </Empty>
-            ) : (
-              <>
-                <SectionTitle>Starred · {starred.length}</SectionTitle>
-                <GroupList groups={starred} counts={counts} navigate={navigate} onStar={toggleFavorite} />
-                <button onClick={openSearch} className="flex w-full items-center gap-4 px-4 py-3 text-left text-send hover:bg-panel">
-                  <span className="flex h-12 w-12 items-center justify-center rounded-full bg-bubble"><Icon name="search" /></span>
-                  <span className="font-medium">Find another group</span>
-                </button>
-              </>
-            )
+          {groups.data && all.length === 0 && <Empty>No groups on this number yet.</Empty>}
+          {starred.length > 0 && (
+            <>
+              <SectionTitle>Starred · {starred.length}</SectionTitle>
+              <GroupList groups={starred} counts={counts} navigate={navigate} onStar={toggleFavorite} />
+            </>
+          )}
+          {others.length > 0 && (
+            <>
+              <SectionTitle>{starred.length ? 'All other groups' : 'All groups'} · {others.length}</SectionTitle>
+              <GroupList groups={others} counts={counts} navigate={navigate} onStar={toggleFavorite} />
+            </>
           )}
         </>
       )}
