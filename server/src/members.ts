@@ -77,8 +77,9 @@ async function recipientKey(sessionId: string, id: string, number: string): Prom
     return isValidPhone(phone) ? phone : null;
   }
   if (!lidCache.has(id)) {
-    const resolved = await openwa.resolvePhone(sessionId, id).catch(() => null);
-    lidCache.set(id, resolved ? normalizePhone(resolved) : null);
+    // Remember a real answer (a phone or "not known"); after an error (e.g. throttled) just try again next time.
+    const resolved = await openwa.resolvePhone(sessionId, id).catch(() => undefined);
+    if (resolved !== undefined) lidCache.set(id, resolved ? normalizePhone(resolved) : null);
   }
   const phone = lidCache.get(id);
   if (phone && isValidPhone(phone)) return phone;

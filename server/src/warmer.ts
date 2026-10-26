@@ -19,6 +19,8 @@ async function warmOnce(log: Log): Promise<void> {
   running = true;
   const started = Date.now();
   let groupsWarmed = 0;
+  let groupsFailed = 0;
+  let firstError = '';
   let numbers = 0;
   try {
     const sessions = (await openwa.listSessions()).filter((s) => s.status === 'ready');
@@ -26,7 +28,7 @@ async function warmOnce(log: Log): Promise<void> {
       try {
         const [groups] = await Promise.all([getGroupList(s.id, true), getContactNames(s.id, true)]);
         await mapLimit(groups, GROUP_CONCURRENCY, async (g) => {
-          await loadGroupMembers(s.id, g.id, true).then(() => groupsWarmed++).catch(() => {});
+          await loadGroupMembers(s.id, g.id, true).then(() => groupsWarmed++).catch((err) => { groupsFailed++; firstError ||= String(err); });
         });
         saveSnapshot(s.id);
         numbers++;
@@ -40,6 +42,7 @@ async function warmOnce(log: Log): Promise<void> {
     running = false;
     Object.assign(warmState, { lastRunAt: new Date().toISOString(), lastRunMs: Date.now() - started, groups: groupsWarmed, numbers });
     if (numbers) log.info({ numbers, groups: groupsWarmed, ms: Date.now() - started }, 'warm-up pass done');
+    if (groupsFailed) log.warn({ failed: groupsFailed, firstError }, 'some groups could not be refreshed (kept the cached copy)');
   }
 }
 

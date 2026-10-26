@@ -15,6 +15,11 @@ services:
       SEND_PACING_ENABLED: "true"           # OpenWA's own safety limits for new numbers / cold messages
       SSRF_ALLOWED_HOSTS: wa-app            # allow delivery updates to our app on the internal network
       CSP_UPGRADE_INSECURE_REQUESTS: "false"
+      # OpenWA's API throttle defaults (10/s, 100/min, 1000/h) starve our background cache and
+      # hidden-number lookups. Only our app can reach OpenWA (internal network + 127.0.0.1), so lift them.
+      RATE_LIMIT_SHORT_LIMIT: "5000"
+      RATE_LIMIT_MEDIUM_LIMIT: "200000"
+      RATE_LIMIT_LONG_LIMIT: "10000000"
     volumes:
       - openwa-data:/app/data               # WhatsApp login lives here: back this up
     ports:
