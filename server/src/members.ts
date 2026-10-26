@@ -23,6 +23,8 @@ export interface Member extends RawMember {
  * number's groups, members and contacts fresh around the clock, and snapshots survive restarts.
  */
 export const REFRESH_MS = 2 * 60 * 1000;
+/** Group members change rarely and WhatsApp rate-limits group queries, so they refresh less often. */
+export const MEMBERS_REFRESH_MS = 30 * 60 * 1000;
 
 const inflight = new Map<string, Promise<unknown>>();
 /** Run `fn` once per key at a time; concurrent callers share the same promise. */
@@ -37,7 +39,7 @@ function once<T>(key: string, fn: () => Promise<T>): Promise<T> {
 interface Cached<T> { at: number; value: T }
 
 /** Serve from cache; refresh in the background when stale; wait only when nothing is cached (or `fresh`). */
-async function swr<T>(name: string, cache: Map<string, Cached<T>>, key: string, load: () => Promise<T>, fresh = false): Promise<T> {
+async function swr<T>(name: string, cache: Map<string, Cached<T>>, key: string, load: () => Promise<T>, fresh = false, maxAge = REFRESH_MS): Promise<T> {
   const hit = cache.get(key);
   const refresh = () => once(`${name}:${key}`, async () => {
     const value = await load();
@@ -45,7 +47,7 @@ async function swr<T>(name: string, cache: Map<string, Cached<T>>, key: string, 
     return value;
   });
   if (hit && !fresh) {
-    if (Date.now() - hit.at > REFRESH_MS) refresh().catch(() => {});
+    if (Date.now() - hit.at > maxAge) refresh().catch(() => {});
     return hit.value;
   }
   return refresh();
@@ -145,7 +147,12 @@ async function fetchGroup(sessionId: string, groupId: string): Promise<GroupData
 }
 
 export function loadGroupMembers(sessionId: string, groupId: string, fresh = false): Promise<GroupData> {
-  return swr('members', groupMemberCache, cacheKey(sessionId, groupId), () => fetchGroup(sessionId, groupId), fresh);
+  return swr('members', groupMemberCache, cacheKey(sessionId, groupId), () => fetchGroup(sessionId, groupId), fresh, MEMBERS_REFRESH_MS);
+}
+
+/** When a group's members were last loaded (0 if never). */
+export function membersLoadedAt(sessionId: string, groupId: string): number {
+  return groupMemberCache.get(cacheKey(sessionId, groupId))?.at ?? 0;
 }
 
 /** Member count without waiting: from cache, else a cheap participant count. */
