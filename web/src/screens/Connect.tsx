@@ -50,7 +50,14 @@ export default function Connect({ navigate }: { navigate: (to: string) => void }
           busy={busy}
           onStart={() => run(`/api/wa/sessions/${encodeURIComponent(s.id)}/start`, 'Starting…')}
           onLogout={() => confirm(`Unlink ${s.phone ? formatPhone(s.phone) : s.name} from the app?`) && run(`/api/wa/sessions/${encodeURIComponent(s.id)}/logout`, 'Logged out')}
-          onRemove={() => confirm(`Remove ${s.phone ? formatPhone(s.phone) : s.name}? Its waiting messages are cancelled; history is kept.`) && run(`/api/wa/sessions/${encodeURIComponent(s.id)}`, 'Number removed', 'DELETE')}
+          onRemove={() =>
+            confirm(
+              `Remove ${s.phone ? formatPhone(s.phone) : s.name}? Its waiting messages are cancelled; history, templates and lists are kept.` +
+                (s.isDefault ? (data.length > 1 ? '\n\nAnother linked number becomes the main one.' : '\n\nA new empty number slot is created so you can scan a QR code again.') : ''),
+            ) && run(`/api/wa/sessions/${encodeURIComponent(s.id)}`, 'Number removed', 'DELETE')
+          }
+          onRestart={() => run(`/api/wa/sessions/${encodeURIComponent(s.id)}/restart`, 'Restarting…')}
+          onMakeMain={() => run(`/api/wa/sessions/${encodeURIComponent(s.id)}/default`, 'Now the main number')}
         />
       ))}
       {data && (
@@ -83,12 +90,14 @@ export default function Connect({ navigate }: { navigate: (to: string) => void }
   );
 }
 
-function SessionCard({ session: s, busy, onStart, onLogout, onRemove }: {
+function SessionCard({ session: s, busy, onStart, onLogout, onRemove, onRestart, onMakeMain }: {
   session: WaSession;
   busy: boolean;
   onStart: () => void;
   onLogout: () => void;
   onRemove: () => void;
+  onRestart: () => void;
+  onMakeMain: () => void;
 }) {
   return (
     <div className="border-b-8 border-panel">
@@ -130,8 +139,17 @@ function SessionCard({ session: s, busy, onStart, onLogout, onRemove }: {
         </>
       )}
 
-      {!s.isDefault && (
-        <button disabled={busy} onClick={onRemove} className="mt-4 block w-full text-xs font-semibold text-red-600">Remove this number</button>
+      <div className="mt-4 flex flex-wrap justify-center gap-2">
+        {s.status !== 'ready' && (
+          <Button variant="ghost" disabled={busy} onClick={onRestart}>Restart connection</Button>
+        )}
+        {!s.isDefault && s.status === 'ready' && (
+          <Button variant="ghost" disabled={busy} onClick={onMakeMain}>Make main</Button>
+        )}
+        <Button variant="danger" disabled={busy} onClick={onRemove}>Remove this number</Button>
+      </div>
+      {s.status !== 'ready' && s.status !== 'qr_ready' && (
+        <p className="mt-2 text-xs text-muted">Stuck here? Try Restart. If it then asks for a QR code, WhatsApp unlinked this device: scan again or remove the number.</p>
       )}
       </div>
     </div>

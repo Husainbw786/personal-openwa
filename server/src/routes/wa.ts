@@ -1,6 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import { db } from '../db.ts';
-import { defaultSessionId, openwa, OpenWAError, type GroupSummary, type Session } from '../openwa.ts';
+import { defaultSessionId, forgetDefaultSession, openwa, OpenWAError, setDefaultSession, type GroupSummary, type Session } from '../openwa.ts';
 import { annotate, forgetSession, groupCount, loadGroupMembers, mapLimit } from '../members.ts';
 import { sendCsv, sendPdf, toRows } from '../export.ts';
 import { registerWebhook } from './hooks.ts';
@@ -73,10 +73,25 @@ export function waRoutes(app: FastifyInstance): void {
     return { ok: true };
   });
 
-  /** Remove a number entirely. Its waiting messages are cancelled; its send history is kept. */
-  app.delete<{ Params: { id: string } }>('/api/wa/sessions/:id', async (req, reply) => {
+  app.post<{ Params: { id: string } }>('/api/wa/sessions/:id/restart', async (req) => {
+    await openwa.restart(req.params.id);
+    groupCache.delete(req.params.id);
+    forgetSession(req.params.id);
+    return { ok: true };
+  });
+
+  app.post<{ Params: { id: string } }>('/api/wa/sessions/:id/default', async (req) => {
+    await openwa.getSession(req.params.id); // 404s if it doesn't exist
+    setDefaultSession(req.params.id);
+    return { ok: true };
+  });
+
+  /**
+   * Remove a number entirely, including the main one. Its waiting messages are cancelled; its send
+   * history is kept. If it was main, another linked number becomes main (or a fresh one is created).
+   */
+  app.delete<{ Params: { id: string } }>('/api/wa/sessions/:id', async (req) => {
     const id = req.params.id;
-    if (id === (await defaultSessionId())) return reply.code(400).send({ message: 'The main number can be logged out, but not removed.' });
     await openwa.logout(id).catch(() => {});
     await openwa.deleteSession(id).catch((err) => {
       if (!(err instanceof OpenWAError && err.status === 404)) throw err;
@@ -84,7 +99,14 @@ export function waRoutes(app: FastifyInstance): void {
     db.prepare(`UPDATE sends SET status = 'cancelled', error = 'The sending number was removed' WHERE session_id = ? AND status = 'queued'`).run(id);
     groupCache.delete(id);
     forgetSession(id);
-    return { ok: true };
+    forgetDefaultSession(id);
+    const newDefault = await defaultSessionId();
+    const fresh = await openwa.getSession(newDefault);
+    if (fresh.status === 'created') {
+      await registerWebhook(newDefault, log);
+      await openwa.start(newDefault).catch(() => {});
+    }
+    return { ok: true, defaultSessionId: newDefault };
   });
 
   /** The default number, kept for older clients. */

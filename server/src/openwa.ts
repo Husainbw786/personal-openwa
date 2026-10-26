@@ -1,4 +1,5 @@
 import { config } from './config.ts';
+import { getSetting, setSetting } from './db.ts';
 
 export type SessionStatus =
   | 'created' | 'initializing' | 'qr_ready' | 'authenticating'
@@ -78,14 +79,20 @@ function safeJson(text: string): unknown {
 const enc = encodeURIComponent;
 
 /**
- * Each linked WhatsApp number is one OpenWA session. The one named OPENWA_SESSION ("main") is the
- * default and is created on boot; more can be added from the app. Session ids are OpenWA's ids.
+ * Each linked WhatsApp number is one OpenWA session; one of them is the "main" (default) number.
+ * Main is the one saved in settings, else the one named OPENWA_SESSION, else the first connected one.
+ * If no session exists at all, a fresh "main" is created, ready for a QR scan.
  */
 let defaultId: string | null = null;
 
 export async function ensureSession(): Promise<Session> {
   const sessions = await call<Session[]>('GET', '/api/sessions');
-  let session = sessions.find((s) => s.name === config.openwaSessionName);
+  const saved = getSetting('default_session', '');
+  let session =
+    sessions.find((s) => s.id === saved) ??
+    sessions.find((s) => s.name === config.openwaSessionName) ??
+    sessions.find((s) => s.status === 'ready') ??
+    sessions[0];
   if (!session) {
     session = await call<Session>('POST', '/api/sessions', { name: config.openwaSessionName });
   }
@@ -96,6 +103,17 @@ export async function ensureSession(): Promise<Session> {
 export async function defaultSessionId(): Promise<string> {
   if (!defaultId) await ensureSession();
   return defaultId!;
+}
+
+export function setDefaultSession(sessionId: string): void {
+  setSetting('default_session', sessionId);
+  defaultId = sessionId;
+}
+
+/** Forget the cached main number (after it was removed); the next lookup picks a new one. */
+export function forgetDefaultSession(removedId: string): void {
+  if (getSetting('default_session', '') === removedId) setSetting('default_session', '');
+  if (defaultId === removedId) defaultId = null;
 }
 
 const base = (sessionId: string) => `/api/sessions/${enc(sessionId)}`;
@@ -114,6 +132,12 @@ export const openwa = {
     return call<Session>('GET', base(sessionId));
   },
   async start(sessionId: string): Promise<void> {
+    await call('POST', `${base(sessionId)}/start`);
+  },
+  /** Stop and start again; for a connection stuck on "reconnecting". Force-kills if a normal stop hangs. */
+  async restart(sessionId: string): Promise<void> {
+    await call('POST', `${base(sessionId)}/stop`).catch(() => call('POST', `${base(sessionId)}/force-kill`));
+    await new Promise((r) => setTimeout(r, 2000));
     await call('POST', `${base(sessionId)}/start`);
   },
   async logout(sessionId: string): Promise<void> {
