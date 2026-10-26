@@ -101,7 +101,11 @@ jobs:
       - name: Health check
         run: |
           for i in $(seq 1 30); do
-            if curl -fsS "${{ vars.APP_URL }}/healthz"; then echo; echo "Deployed ✅"; exit 0; fi
+            if curl -fsS "${{ vars.APP_URL }}/healthz"; then
+              echo; echo "Deployed ✅"
+              ssh deploy@${{ secrets.DEPLOY_HOST }} 'cd /opt/wa-sender && docker compose -f docker-compose.yml -f docker-compose.prod.yml ps --format "table {{.Service}}\t{{.Image}}\t{{.Status}}"'
+              exit 0
+            fi
             sleep 5
           done
           echo "App did not become healthy" >&2
