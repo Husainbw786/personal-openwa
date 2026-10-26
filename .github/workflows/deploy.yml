@@ -1,4 +1,5 @@
-# Every push to main: type-check + build, then ship to the Google Cloud server and restart.
+# Every push to main: type-check + build, build the Docker image here and push it to GHCR,
+# then have the Google Cloud server pull it and restart (the tiny VM never builds anything).
 # Secrets (Settings → Secrets and variables → Actions):
 #   DEPLOY_HOST         server IP
 #   DEPLOY_SSH_KEY      private key of the `deploy` user on the server
@@ -6,6 +7,8 @@
 # Variable:
 #   APP_URL             e.g. https://34-56-155-51.sslip.io (used for the health check)
 # The server keeps its own .env (passwords, keys); it is never uploaded from here.
+# The server pulls the image with this run's short-lived GITHUB_TOKEN and logs out right after,
+# so no registry credentials are stored anywhere.
 
 name: Deploy
 
@@ -17,6 +20,9 @@ on:
 concurrency:
   group: deploy
   cancel-in-progress: false
+
+env:
+  IMAGE: ghcr.io/husainbw786/personal-openwa
 
 jobs:
   check:
@@ -33,9 +39,38 @@ jobs:
         working-directory: web
         run: npm ci --no-fund --no-audit && npm run build
 
-  deploy:
-    needs: check
+  image:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and push image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64
+          push: true
+          tags: |
+            ${{ env.IMAGE }}:${{ github.sha }}
+            ${{ env.IMAGE }}:latest
+          labels: org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  deploy:
+    needs: [check, image]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
     steps:
       - uses: actions/checkout@v4
 
@@ -46,18 +81,20 @@ jobs:
           chmod 600 ~/.ssh/id_ed25519
           echo "${{ secrets.DEPLOY_KNOWN_HOSTS }}" > ~/.ssh/known_hosts
 
-      - name: Upload code
+      - name: Upload compose files
         run: |
-          rsync -az --delete \
-            --exclude .git --exclude .github --exclude node_modules --exclude dist --exclude data --exclude .env \
-            ./ deploy@${{ secrets.DEPLOY_HOST }}:/opt/wa-sender/
+          rsync -az docker-compose.yml docker-compose.prod.yml deploy@${{ secrets.DEPLOY_HOST }}:/opt/wa-sender/
 
-      - name: Rebuild and restart
+      - name: Pull and restart
         run: |
-          ssh deploy@${{ secrets.DEPLOY_HOST }} '
+          echo "${{ secrets.GITHUB_TOKEN }}" | ssh deploy@${{ secrets.DEPLOY_HOST }} '
             set -e
             cd /opt/wa-sender
-            docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build --remove-orphans
+            export APP_TAG=${{ github.sha }}
+            docker login ghcr.io -u ${{ github.actor }} --password-stdin >/dev/null
+            trap "docker logout ghcr.io >/dev/null" EXIT
+            docker compose -f docker-compose.yml -f docker-compose.prod.yml pull wa-app
+            docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --no-build --remove-orphans
             docker image prune -f >/dev/null
           '
 

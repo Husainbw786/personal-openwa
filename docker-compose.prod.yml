@@ -1,9 +1,11 @@
 # Server overlay: adds HTTPS in front of the app and stops exposing port 3000 directly.
-#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --no-build
+# The app image is built by GitHub Actions and pulled from GHCR; APP_TAG picks the commit (default latest).
 # Needs DOMAIN in .env (e.g. 34-56-155-51.sslip.io, or your own domain pointing at the server).
 
 services:
   wa-app:
+    image: ghcr.io/husainbw786/personal-openwa:${APP_TAG:-latest}
     ports: !reset []
     mem_limit: 256m
 
