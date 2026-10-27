@@ -3,6 +3,7 @@ import { db } from '../db.ts';
 import { defaultSessionId, forgetDefaultSession, openwa, OpenWAError, setDefaultSession, type Session } from '../openwa.ts';
 import { annotate, cachedCount, forgetSession, getGroupList, groupCount, loadGroupMembers, mapLimit } from '../members.ts';
 import { sendCsv, sendPdf, toRows } from '../export.ts';
+import { getMyGroups, myGroupMembership, setMyGroup } from '../mygroups.ts';
 import { registerWebhook } from './hooks.ts';
 import { sessionLabel } from '../queue.ts';
 
@@ -141,7 +142,22 @@ export function waRoutes(app: FastifyInstance): void {
   app.get<{ Params: { id: string }; Querystring: { templateId?: string; fresh?: string; session?: string } }>('/api/groups/:id', async (req) => {
     const group = await loadGroupMembers(await pickSession(req.query), req.params.id, req.query.fresh === '1');
     const templateId = req.query.templateId ? Number(req.query.templateId) : null;
-    return { id: req.params.id, kind: 'group', name: group.name, description: group.description, members: annotate(group.members, templateId) };
+    const membership = await myGroupMembership(req.params.id);
+    const isMine = getMyGroups().some((g) => g.groupId === req.params.id);
+    return {
+      id: req.params.id, kind: 'group', name: group.name, description: group.description, isMine,
+      myGroups: getMyGroups().filter((g) => g.groupId !== req.params.id).map((g) => g.name),
+      members: annotate(group.members, templateId, membership),
+    };
+  });
+
+  app.get('/api/my-groups', async () => getMyGroups());
+
+  /** Mark or unmark a group as one of yours. */
+  app.put<{ Params: { id: string }; Body: { mine: boolean; name?: string }; Querystring: { session?: string } }>('/api/my-groups/:id', async (req) => {
+    const sessionId = await pickSession(req.query);
+    const name = req.body?.name || (await loadGroupMembers(sessionId, req.params.id)).name;
+    return setMyGroup({ sessionId, groupId: req.params.id, name }, !!req.body?.mine);
   });
 
   app.get<{ Params: { id: string; format: string }; Querystring: { session?: string } }>('/api/groups/:id/export.:format', async (req, reply) => {

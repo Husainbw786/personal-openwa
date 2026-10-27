@@ -44,12 +44,21 @@ export default function GroupDetail({ source, navigate }: { source: Source; navi
   const [menuOpen, setMenuOpen] = useState(false);
   const [setupOpen, setSetupOpen] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
-  const [filter, setFilter] = useState<'available' | 'all' | 'sent' | 'excluded' | 'admins'>('available');
+  const [filter, setFilter] = useState<'available' | 'all' | 'sent' | 'excluded' | 'admins' | 'notMine'>('available');
   const [query, setQuery] = useState('');
   const [searchOpen, setSearchOpen] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [editing, setEditing] = useState<Member | null>(null);
   const [sending, setSending] = useState(false);
+
+  async function toggleMine() {
+    if (source.kind !== 'group' || !group.data) return;
+    const mine = !group.data.isMine;
+    await api(`/api/my-groups/${encodeURIComponent(source.id)}${qs()}`, { method: 'PUT', body: { mine, name: group.data.name } });
+    setMenuOpen(false);
+    toast(mine ? 'Marked as your group. Its members are now tagged in other groups.' : 'No longer your group');
+    await group.reload();
+  }
 
   async function deleteList() {
     if (!confirm('Delete this uploaded list? Send history is kept, so nobody gets the same message twice.')) return;
@@ -64,6 +73,7 @@ export default function GroupDetail({ source, navigate }: { source: Source; navi
     sent: members.filter((m) => !m.excluded && !m.selectable).length,
     excluded: members.filter((m) => m.excluded).length,
     admins: members.filter((m) => m.isAdmin).length,
+    notMine: members.filter((m) => !m.inMyGroups?.length && !m.excluded).length,
   }), [members]);
 
   // Admins first (easy to spot), then people with a name: their messages read better ("Hi Rahul" not "Hi there").
@@ -75,6 +85,7 @@ export default function GroupDetail({ source, navigate }: { source: Source; navi
       if (filter === 'sent') return !m.excluded && !m.selectable;
       if (filter === 'excluded') return m.excluded;
       if (filter === 'admins') return m.isAdmin;
+      if (filter === 'notMine') return !m.inMyGroups?.length && !m.excluded;
       return true;
     })
     .filter((m) => `${m.name ?? ''} ${m.phone}`.toLowerCase().includes(query.toLowerCase()));
@@ -186,6 +197,9 @@ export default function GroupDetail({ source, navigate }: { source: Source; navi
       <div className="no-scrollbar flex items-center gap-2 overflow-x-auto px-3 py-2.5">
         <Chip active={filter === 'available'} onClick={() => setFilter('available')}>Can send {template ? counts.available : ''}</Chip>
         <Chip active={filter === 'sent'} onClick={() => setFilter('sent')}>Already got it {template ? counts.sent : ''}</Chip>
+        {(group.data?.myGroups?.length ?? 0) > 0 && (
+          <Chip active={filter === 'notMine'} onClick={() => setFilter('notMine')}>Not in my group {counts.notMine}</Chip>
+        )}
         {counts.admins > 0 && <Chip active={filter === 'admins'} onClick={() => setFilter('admins')}>Admins {counts.admins}</Chip>}
         <Chip active={filter === 'excluded'} onClick={() => setFilter('excluded')}>Hidden {counts.excluded}</Chip>
         <Chip active={filter === 'all'} onClick={() => setFilter('all')}>All {members.length || ''}</Chip>
@@ -215,6 +229,11 @@ export default function GroupDetail({ source, navigate }: { source: Source; navi
                   <span className={`min-w-0 flex-1 border-b border-gray-100 py-2.5 ${m.selectable ? '' : 'opacity-55'}`}>
                     <span className="flex items-center gap-2">
                       <span className="min-w-0 flex-1 truncate text-[16px] font-medium">{m.name ?? <span className="font-normal text-muted">No name</span>}</span>
+                      {m.inMyGroups?.length ? (
+                        <span title={`Already in ${m.inMyGroups.join(', ')}`} className="max-w-[9rem] shrink-0 truncate rounded-full bg-sky-100 px-2 py-0.5 text-[11px] font-semibold text-sky-800">
+                          In {m.inMyGroups[0]}{m.inMyGroups.length > 1 ? ` +${m.inMyGroups.length - 1}` : ''}
+                        </span>
+                      ) : null}
                       {m.isAdmin && <span className="shrink-0 rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-amber-800">Admin</span>}
                       {m.excluded ? <span className="text-xs text-muted">Hidden</span> : m.sendStatus ? <StatusChip status={m.sendStatus} /> : null}
                     </span>
@@ -309,6 +328,17 @@ export default function GroupDetail({ source, navigate }: { source: Source; navi
           <a href={`${basePath}/export.csv${qs()}`} download onClick={() => setMenuOpen(false)} className="flex items-center gap-4 rounded-xl px-3 py-3 text-[15px] hover:bg-panel">
             <Icon name="download" className="text-muted" /> Download contacts (CSV)
           </a>
+          {source.kind === 'group' && group.data && (
+            <button onClick={toggleMine} className="flex w-full items-center gap-4 rounded-xl px-3 py-3 text-left text-[15px] hover:bg-panel">
+              <Icon name="star" className="text-muted" />
+              <span className="flex-1">
+                {group.data.isMine ? 'Unmark as my group' : 'This is my group'}
+                <span className="block text-xs text-muted">
+                  {group.data.isMine ? 'Stop tagging its members in other groups.' : 'Tag its members as “In this group” everywhere else.'}
+                </span>
+              </span>
+            </button>
+          )}
           {source.kind === 'list' && (
             <button onClick={deleteList} className="flex w-full items-center gap-4 rounded-xl px-3 py-3 text-left text-[15px] text-red-600 hover:bg-red-50">
               <Icon name="trash" /> Delete this list

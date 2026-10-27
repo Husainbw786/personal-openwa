@@ -14,6 +14,8 @@ export interface Member extends RawMember {
   excluded: boolean;
   sendStatus: string | null;
   selectable: boolean;
+  /** Names of "my groups" this person is already in (empty if none). */
+  inMyGroups: string[];
 }
 
 /**
@@ -207,7 +209,7 @@ export function loadSnapshots(): number {
 }
 
 /** Mark who is hidden, who already got the selected template, and who can be picked. */
-export function annotate(raw: RawMember[], templateId: number | null): Member[] {
+export function annotate(raw: RawMember[], templateId: number | null, myGroups: Map<string, string[]> = new Map()): Member[] {
   const excluded = new Set((db.prepare('SELECT phone FROM excluded').all() as Array<{ phone: string }>).map((r) => r.phone));
   const names = new Map((db.prepare('SELECT phone, name FROM contact_names').all() as Array<{ phone: string; name: string }>).map((r) => [r.phone, r.name]));
   const sendStatus = new Map<string, string>();
@@ -224,6 +226,7 @@ export function annotate(raw: RawMember[], templateId: number | null): Member[] 
       name: names.get(m.phone) ?? m.whatsappName,
       excluded: isExcluded,
       sendStatus: status,
+      inMyGroups: myGroups.get(m.phone) ?? [],
       // failed/cancelled sends can be retried; anything else counts as "already got this template".
       selectable: !isExcluded && (status === null || status === 'failed' || status === 'cancelled'),
     };

@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { db } from '../db.ts';
 import { annotate, type RawMember } from '../members.ts';
+import { getMyGroups, myGroupMembership } from '../mygroups.ts';
 import { parseContactsCsv, sendCsv, sendPdf, toRows } from '../export.ts';
 import { normalizeRecipient, isValidRecipient } from '../phone.ts';
 
@@ -72,7 +73,12 @@ export function listRoutes(app: FastifyInstance): void {
     const data = loadList(Number(req.params.id));
     if (!data) return reply.code(404).send({ message: 'List not found' });
     const templateId = req.query.templateId ? Number(req.query.templateId) : null;
-    return { id: `list:${data.list.id}`, kind: 'list', name: data.list.name, description: '', members: annotate(data.members, templateId) };
+    const membership = await myGroupMembership();
+    return {
+      id: `list:${data.list.id}`, kind: 'list', name: data.list.name, description: '', isMine: false,
+      myGroups: getMyGroups().map((g) => g.name),
+      members: annotate(data.members, templateId, membership),
+    };
   });
 
   app.get<{ Params: { id: string; format: string } }>('/api/lists/:id/export.:format', async (req, reply) => {

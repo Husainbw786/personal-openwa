@@ -65,6 +65,8 @@ export interface Member {
   excluded: boolean;
   sendStatus: string | null;
   selectable: boolean;
+  /** Names of your own groups this person is already in. */
+  inMyGroups?: string[];
 }
 
 export interface ContactList {
@@ -79,6 +81,10 @@ export interface GroupDetail {
   kind: 'group' | 'list';
   name: string;
   description: string;
+  /** You marked this group as one of yours. */
+  isMine?: boolean;
+  /** Names of your groups used for the "already in" tag (excluding this one). */
+  myGroups?: string[];
   members: Member[];
 }
 
