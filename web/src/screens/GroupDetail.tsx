@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import { api, formatPhone, renderPreview, type GroupDetail as Detail, type Member, type Template } from '../api';
 import { getSendSession, getViewSession, loadSessions, resolveSession, sessionTitle, setSendSession } from '../sessions';
 import { Avatar, Button, Chip, Empty, ErrorBox, Field, Header, Icon, IconButton, Sheet, Spinner, StatusChip, inputClass, toast, useLoad } from '../ui';
@@ -46,7 +46,7 @@ export default function GroupDetail({ source, navigate }: { source: Source; navi
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [filter, setFilter] = useState<'available' | 'all' | 'sent' | 'excluded' | 'admins' | 'notMine'>('available');
   const [query, setQuery] = useState('');
-  const [searchOpen, setSearchOpen] = useState(false);
+  const searchRef = useRef<HTMLInputElement>(null);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [editing, setEditing] = useState<Member | null>(null);
   const [sending, setSending] = useState(false);
@@ -79,8 +79,11 @@ export default function GroupDetail({ source, navigate }: { source: Source; navi
   // Admins first (easy to spot), then people with a name: their messages read better ("Hi Rahul" not "Hi there").
   const sorted = useMemo(() => [...members].sort((a, b) =>
     Number(b.selectable) - Number(a.selectable) || Number(b.isAdmin) - Number(a.isAdmin) || Number(!!b.name) - Number(!!a.name)), [members]);
+  // While searching, look through the whole group (not just the selected chip).
+  const searching = query.trim().length > 0;
   const visible = sorted
     .filter((m) => {
+      if (searching) return true;
       if (filter === 'available') return m.selectable;
       if (filter === 'sent') return !m.excluded && !m.selectable;
       if (filter === 'excluded') return m.excluded;
@@ -88,7 +91,7 @@ export default function GroupDetail({ source, navigate }: { source: Source; navi
       if (filter === 'notMine') return !m.inMyGroups?.length && !m.excluded;
       return true;
     })
-    .filter((m) => `${m.name ?? ''} ${m.phone}`.toLowerCase().includes(query.toLowerCase()));
+    .filter((m) => matchesSearch(m, query));
 
   function pickTemplate(id: number) {
     setTemplateId(id);
@@ -178,21 +181,33 @@ export default function GroupDetail({ source, navigate }: { source: Source; navi
         avatar={<Avatar label={title} kind={source.kind === 'list' ? 'list' : 'group'} size="sm" />}
         right={
           <>
-            <IconButton icon="search" label="Search members" onClick={() => setSearchOpen((v) => !v)} />
+            <IconButton icon="search" label="Search members" onClick={() => searchRef.current?.focus()} />
             <IconButton icon="menu" label="More options" onClick={() => setMenuOpen(true)} />
           </>
         }
       />
 
-      {searchOpen && (
-        <div className="border-b border-gray-100 px-3 py-2">
-          <div className="flex items-center gap-2 rounded-full bg-panel px-4 py-2">
-            <Icon name="search" size={18} className="text-muted" />
-            <input autoFocus value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search name or number" className="min-w-0 flex-1 bg-transparent text-[15px] outline-none" />
-            {query && <button onClick={() => setQuery('')} aria-label="Clear search" className="text-muted"><Icon name="close" size={18} /></button>}
-          </div>
+      <div className="border-b border-gray-100 px-3 py-2">
+        <div className="flex items-center gap-2 rounded-full bg-panel px-4 py-2">
+          <Icon name="search" size={18} className="text-muted" />
+          <input
+            ref={searchRef}
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            inputMode="search"
+            placeholder="Search name or number (e.g. 98123 45678)"
+            aria-label="Search members by name or number"
+            className="min-w-0 flex-1 bg-transparent text-[15px] outline-none"
+          />
+          {query && <button onClick={() => setQuery('')} aria-label="Clear search" className="text-muted"><Icon name="close" size={18} /></button>}
         </div>
-      )}
+        {searching && (
+          <p className="px-2 pt-1.5 text-xs text-muted">
+            {visible.length} {visible.length === 1 ? 'match' : 'matches'} in the whole group{filter !== 'all' ? ' (ignoring the filter)' : ''}.
+            {/^\D*\d/.test(query) && hiddenCount > 0 ? ` People who hide their number can only be found by name.` : ''}
+          </p>
+        )}
+      </div>
 
       <div className="no-scrollbar flex items-center gap-2 overflow-x-auto px-3 py-2.5">
         <Chip active={filter === 'available'} onClick={() => setFilter('available')}>Can send {template ? counts.available : ''}</Chip>
@@ -403,4 +418,17 @@ function MemberSheet({ member, onClose, onSaveName, onExclude }: {
       )}
     </Sheet>
   );
+}
+
+/**
+ * Match by name, or by number in any format: "98123 45678", "+91 98123-45678", "098123…" all
+ * find 919812345678. Three or more digits are enough for a partial number.
+ */
+function matchesSearch(m: Member, query: string): boolean {
+  const q = query.trim().toLowerCase();
+  if (!q) return true;
+  if ((m.name ?? '').toLowerCase().includes(q) || (m.whatsappName ?? '').toLowerCase().includes(q)) return true;
+  const digits = q.replace(/\D/g, '').replace(/^0+/, '');
+  if (digits.length < 3 || m.phone.endsWith('@lid')) return false;
+  return m.phone.includes(digits);
 }
