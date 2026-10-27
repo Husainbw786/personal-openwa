@@ -34,10 +34,11 @@ export interface ExportRow {
   name: string;
   phone: string; // recipient key, so a re-upload maps back to the same person
   hidden: boolean;
+  admin: boolean;
 }
 
 export function toRows(members: Member[]): ExportRow[] {
-  return members.map((m) => ({ name: m.name ?? '', phone: m.phone, hidden: m.phone.endsWith('@lid') }));
+  return members.map((m) => ({ name: m.name ?? '', phone: m.phone, hidden: m.phone.endsWith('@lid'), admin: m.isAdmin }));
 }
 
 function fileName(title: string, ext: string): string {
@@ -51,7 +52,7 @@ function csvCell(value: string): string {
 
 /** CSV that our own upload understands (name, phone). Excel opens it fine; BOM keeps non-English names intact. */
 export function sendCsv(reply: FastifyReply, title: string, rows: ExportRow[]) {
-  const lines = ['name,phone', ...rows.map((r) => `${csvCell(r.name)},${csvCell(r.hidden ? r.phone : `+${r.phone}`)}`)];
+  const lines = ['name,phone,role', ...rows.map((r) => `${csvCell(r.name)},${csvCell(r.hidden ? r.phone : `+${r.phone}`)},${r.admin ? 'admin' : 'member'}`)];
   return reply
     .header('Content-Type', 'text/csv; charset=utf-8')
     .header('Content-Disposition', `attachment; filename="${encodeURIComponent(fileName(title, 'csv'))}"`)
@@ -89,7 +90,7 @@ export function sendPdf(reply: FastifyReply, title: string, rows: ExportRow[]) {
     }
     const y = doc.y;
     doc.font('regular').fillColor('#000').text(String(i + 1), x.n, y, { width: 30, lineBreak: false });
-    writeName(doc, r.name, x.name, y);
+    writeName(doc, r.admin ? `${r.name || '—'} (admin)` : r.name, x.name, y);
     doc.font('regular').fillColor(r.hidden ? '#888' : '#000').text(r.hidden ? `hidden (${r.phone})` : `+${r.phone}`, x.phone, y, { width: 215, lineBreak: false });
     doc.x = 40;
     doc.y = y + 14;
@@ -103,7 +104,7 @@ export function sendPdf(reply: FastifyReply, title: string, rows: ExportRow[]) {
 }
 
 /** Parse an uploaded CSV: finds the phone and name columns by header, or guesses when there's no header. */
-export function parseContactsCsv(text: string): Array<{ phone: string; name: string | null }> {
+export function parseContactsCsv(text: string): Array<{ phone: string; name: string | null; isAdmin: boolean }> {
   const rows = parseCsv(text.replace(/^﻿/, ''));
   if (rows.length === 0) return [];
   const looksLikePhone = (c: string | undefined) => !!c && (/@lid$/i.test(c.trim()) || /^[+\d\s().-]{7,}$/.test(c.trim()) && c.replace(/\D/g, '').length >= 7);
@@ -129,9 +130,15 @@ export function parseContactsCsv(text: string): Array<{ phone: string; name: str
   } else {
     nameCol = (body[0] ?? []).findIndex((c, i) => i !== phoneCol && /\p{L}/u.test(c) && !looksLikePhone(c));
   }
+  // Optional role column (our own export writes admin/member).
+  const roleCol = hasHeader ? head.findIndex((h, i) => i !== phoneCol && i !== nameCol && /^(role|admin|is admin|type)$/.test(h)) : -1;
   return body
     .filter((r) => r[phoneCol]?.trim())
-    .map((r) => ({ phone: r[phoneCol].trim(), name: nameCol >= 0 ? r[nameCol]?.trim() || null : null }));
+    .map((r) => ({
+      phone: r[phoneCol].trim(),
+      name: nameCol >= 0 ? r[nameCol]?.trim() || null : null,
+      isAdmin: roleCol >= 0 && /admin/i.test(r[roleCol] ?? ''),
+    }));
 }
 
 function parseCsv(text: string): string[][] {

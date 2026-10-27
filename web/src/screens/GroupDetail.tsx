@@ -44,7 +44,7 @@ export default function GroupDetail({ source, navigate }: { source: Source; navi
   const [menuOpen, setMenuOpen] = useState(false);
   const [setupOpen, setSetupOpen] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
-  const [filter, setFilter] = useState<'available' | 'all' | 'sent' | 'excluded'>('available');
+  const [filter, setFilter] = useState<'available' | 'all' | 'sent' | 'excluded' | 'admins'>('available');
   const [query, setQuery] = useState('');
   const [searchOpen, setSearchOpen] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
@@ -63,15 +63,18 @@ export default function GroupDetail({ source, navigate }: { source: Source; navi
     available: members.filter((m) => m.selectable).length,
     sent: members.filter((m) => !m.excluded && !m.selectable).length,
     excluded: members.filter((m) => m.excluded).length,
+    admins: members.filter((m) => m.isAdmin).length,
   }), [members]);
 
-  // People with a name first: their messages read better ("Hi Rahul" rather than "Hi there").
-  const sorted = useMemo(() => [...members].sort((a, b) => Number(b.selectable) - Number(a.selectable) || Number(!!b.name) - Number(!!a.name)), [members]);
+  // Admins first (easy to spot), then people with a name: their messages read better ("Hi Rahul" not "Hi there").
+  const sorted = useMemo(() => [...members].sort((a, b) =>
+    Number(b.selectable) - Number(a.selectable) || Number(b.isAdmin) - Number(a.isAdmin) || Number(!!b.name) - Number(!!a.name)), [members]);
   const visible = sorted
     .filter((m) => {
       if (filter === 'available') return m.selectable;
       if (filter === 'sent') return !m.excluded && !m.selectable;
       if (filter === 'excluded') return m.excluded;
+      if (filter === 'admins') return m.isAdmin;
       return true;
     })
     .filter((m) => `${m.name ?? ''} ${m.phone}`.toLowerCase().includes(query.toLowerCase()));
@@ -83,6 +86,7 @@ export default function GroupDetail({ source, navigate }: { source: Source; navi
   }
 
   function toggle(m: Member) {
+    if (!template) return setSetupOpen(true); // pick the message first, then people
     if (!m.selectable) return;
     setSelected((prev) => {
       const next = new Set(prev);
@@ -182,6 +186,7 @@ export default function GroupDetail({ source, navigate }: { source: Source; navi
       <div className="no-scrollbar flex items-center gap-2 overflow-x-auto px-3 py-2.5">
         <Chip active={filter === 'available'} onClick={() => setFilter('available')}>Can send {template ? counts.available : ''}</Chip>
         <Chip active={filter === 'sent'} onClick={() => setFilter('sent')}>Already got it {template ? counts.sent : ''}</Chip>
+        {counts.admins > 0 && <Chip active={filter === 'admins'} onClick={() => setFilter('admins')}>Admins {counts.admins}</Chip>}
         <Chip active={filter === 'excluded'} onClick={() => setFilter('excluded')}>Hidden {counts.excluded}</Chip>
         <Chip active={filter === 'all'} onClick={() => setFilter('all')}>All {members.length || ''}</Chip>
       </div>
@@ -190,33 +195,27 @@ export default function GroupDetail({ source, navigate }: { source: Source; navi
       {group.loading && !group.data && <Spinner />}
       {group.error && <ErrorBox message={group.error} retry={group.reload} />}
       {group.data && !template && (
-        <Empty>
-          <span className="mx-auto mb-3 flex h-16 w-16 items-center justify-center rounded-full bg-bubble text-send"><Icon name="message" size={28} /></span>
-          <span className="block text-base font-medium text-ink">Choose a message first</span>
-          People who already got it are greyed out, so nobody gets it twice.
-          <span className="mt-4 block">
-            {active.length
-              ? <button onClick={() => setSetupOpen(true)} className="rounded-full bg-send px-5 py-2.5 text-sm font-semibold text-white">Choose message</button>
-              : templates.data && <button onClick={() => navigate('/templates')} className="rounded-full bg-send px-5 py-2.5 text-sm font-semibold text-white">Write your first message</button>}
-          </span>
-        </Empty>
+        <button onClick={() => (active.length ? setSetupOpen(true) : navigate('/templates'))} className="mx-3 mb-2 flex w-[calc(100%-1.5rem)] items-center gap-3 rounded-xl bg-bubble px-4 py-3 text-left text-sm text-send">
+          <Icon name="message" size={20} />
+          <span className="flex-1"><b>{active.length ? 'Choose a message' : 'Write your first message'}</b> to start picking people. Anyone who already got it is greyed out.</span>
+        </button>
       )}
-      {group.data && template && visible.length === 0 && <Empty>{query ? `Nobody matches “${query}”.` : filter === 'available' ? 'Everyone here already got this message.' : 'Nobody here.'}</Empty>}
+      {group.data && visible.length === 0 && <Empty>{query ? `Nobody matches “${query}”.` : filter === 'available' ? 'Everyone here already got this message.' : 'Nobody here.'}</Empty>}
 
-      {template && (
+      {group.data && (
         <ul>
           {visible.map((m) => {
             const checked = selected.has(m.phone);
             return (
               <li key={m.phone} className={`flex items-center ${checked ? 'bg-[#f0fdf4]' : ''}`}>
                 <button onClick={() => toggle(m)} disabled={!m.selectable} aria-pressed={checked} className="flex min-w-0 flex-1 items-center gap-3.5 py-1 pl-4 text-left">
-                  <span className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full border-2 text-sm text-white ${checked ? 'border-send bg-send' : 'border-gray-300'} ${m.selectable ? '' : 'invisible'}`}>
+                  <span className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full border-2 text-sm text-white ${checked ? 'border-send bg-send' : 'border-gray-300'} ${m.selectable && template ? '' : 'invisible'}`}>
                     {checked && '✓'}
                   </span>
                   <span className={`min-w-0 flex-1 border-b border-gray-100 py-2.5 ${m.selectable ? '' : 'opacity-55'}`}>
                     <span className="flex items-center gap-2">
                       <span className="min-w-0 flex-1 truncate text-[16px] font-medium">{m.name ?? <span className="font-normal text-muted">No name</span>}</span>
-                      {m.isAdmin && <span className="shrink-0 rounded bg-bubble px-1.5 py-0.5 text-[11px] font-medium text-send">Group admin</span>}
+                      {m.isAdmin && <span className="shrink-0 rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-amber-800">Admin</span>}
                       {m.excluded ? <span className="text-xs text-muted">Hidden</span> : m.sendStatus ? <StatusChip status={m.sendStatus} /> : null}
                     </span>
                     <span className="block text-[13px] text-muted">{formatPhone(m.phone)}</span>

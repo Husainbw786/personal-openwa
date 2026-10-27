@@ -24,19 +24,21 @@ export function listRoutes(app: FastifyInstance): void {
     if (parsed.length === 0) return reply.code(400).send({ message: 'No phone numbers found. The file needs a column like "phone" or "number".' });
 
     const seen = new Map<string, string | null>();
+    const admins = new Set<string>();
     let invalid = 0;
     for (const row of parsed) {
       const key = normalizeRecipient(row.phone);
       if (!isValidRecipient(key)) { invalid++; continue; }
       if (!seen.has(key) || (!seen.get(key) && row.name)) seen.set(key, row.name);
+      if (row.isAdmin) admins.add(key);
     }
     if (seen.size === 0) return reply.code(400).send({ message: `None of the ${parsed.length} rows had a valid phone number.` });
 
-    const insertMember = db.prepare('INSERT INTO list_members (list_id, phone, name) VALUES (?, ?, ?)');
+    const insertMember = db.prepare('INSERT INTO list_members (list_id, phone, name, is_admin) VALUES (?, ?, ?, ?)');
     db.exec('BEGIN');
     try {
       const listId = Number(db.prepare('INSERT INTO lists (name) VALUES (?)').run(name).lastInsertRowid);
-      for (const [phone, memberName] of seen) insertMember.run(listId, phone, memberName);
+      for (const [phone, memberName] of seen) insertMember.run(listId, phone, memberName, admins.has(phone) ? 1 : 0);
       db.exec('COMMIT');
       return { id: listId, name, added: seen.size, duplicates: parsed.length - invalid - seen.size, invalid };
     } catch (err) {
@@ -61,8 +63,8 @@ export function listRoutes(app: FastifyInstance): void {
   function loadList(id: number) {
     const list = db.prepare('SELECT id, name FROM lists WHERE id = ?').get(id) as { id: number; name: string } | undefined;
     if (!list) return null;
-    const rows = db.prepare('SELECT phone, name FROM list_members WHERE list_id = ?').all(id) as Array<{ phone: string; name: string | null }>;
-    const members: RawMember[] = rows.map((r) => ({ phone: r.phone, whatsappName: r.name, isAdmin: false }));
+    const rows = db.prepare('SELECT phone, name, is_admin FROM list_members WHERE list_id = ?').all(id) as Array<{ phone: string; name: string | null; is_admin: number }>;
+    const members: RawMember[] = rows.map((r) => ({ phone: r.phone, whatsappName: r.name, isAdmin: !!r.is_admin }));
     return { list, members };
   }
 
