@@ -1,3 +1,5 @@
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { db } from './db.ts';
 import { annotate, loadGroupMembers } from './members.ts';
 import { getMyGroups, type MyGroup } from './mygroups.ts';
@@ -11,6 +13,8 @@ import { csvText, toRows } from './export.ts';
 const CHECK_EVERY_MS = 60_000;
 const BACKUP_EVERY_MS = 60 * 60 * 1000;
 const KEEP_BACKUPS_DAYS = 90;
+/** If this folder exists (mounted on the server), each backup is also written there as plain files; the server pushes it to a private GitHub repo. */
+const BACKUP_DIR = process.env.BACKUP_DIR ?? '/app/backups';
 
 type Log = { info: (o: object, m: string) => void; warn: (o: object, m: string) => void };
 let log: Log = { info: () => {}, warn: () => {} };
@@ -95,7 +99,34 @@ export async function backupGroup(g: MyGroup): Promise<number> {
   const res = db.prepare('INSERT INTO group_backups (group_id, group_name, taken_at, member_count, joined, left_count, csv) VALUES (?, ?, ?, ?, ?, ?, ?)')
     .run(g.groupId, data.name || g.name, now(), data.members.length, prev ? joined : 0, prev ? left : 0, csv);
   db.prepare('DELETE FROM group_backups WHERE taken_at < ?').run(new Date(Date.now() - KEEP_BACKUPS_DAYS * 86_400_000).toISOString());
+  writeBackupFiles(g, data.name || g.name, csv);
   return Number(res.lastInsertRowid);
+}
+
+function csvCell(value: string): string {
+  return /[",\n\r]/.test(value) ? `"${value.replace(/"/g, '""')}"` : value;
+}
+
+/** <BACKUP_DIR>/<group>/members.csv (current list) and joins-leaves.csv (every join/leave so far). */
+function writeBackupFiles(g: MyGroup, name: string, membersCsv: string): void {
+  if (!existsSync(BACKUP_DIR)) return;
+  try {
+    const slug = name.replace(/[^\p{L}\p{N} _-]+/gu, '').trim().replace(/\s+/g, '-').slice(0, 60) || g.groupId;
+    const dir = join(BACKUP_DIR, slug);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'members.csv'), membersCsv);
+    const events = db.prepare(`
+      SELECT first_seen AS at, 'joined' AS event, name, phone FROM member_log WHERE group_id = ? AND initial = 0
+      UNION ALL
+      SELECT left_at AS at, 'left' AS event, name, phone FROM member_log WHERE group_id = ? AND left_at IS NOT NULL
+      ORDER BY at
+    `).all(g.groupId, g.groupId) as Array<{ at: string; event: string; name: string | null; phone: string }>;
+    const ist = (iso: string) => new Date(iso).toLocaleString('sv-SE', { timeZone: 'Asia/Kolkata' });
+    const lines = ['time_ist,event,name,phone', ...events.map((e) => [ist(e.at), e.event, csvCell(e.name ?? ''), e.phone.endsWith('@lid') ? e.phone : `+${e.phone}`].join(','))];
+    writeFileSync(join(dir, 'joins-leaves.csv'), `\ufeff${lines.join('\r\n')}\r\n`);
+  } catch (err) {
+    log.warn({ err: String(err) }, 'could not write backup files');
+  }
 }
 
 async function checkAll(): Promise<void> {
