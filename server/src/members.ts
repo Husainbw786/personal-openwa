@@ -16,6 +16,8 @@ export interface Member extends RawMember {
   selectable: boolean;
   /** Names of "my groups" this person is already in (empty if none). */
   inMyGroups: string[];
+  /** When they joined one of my groups (ISO), if that happened while we were tracking. */
+  joinedMyGroupAt: string | null;
 }
 
 /**
@@ -209,7 +211,7 @@ export function loadSnapshots(): number {
 }
 
 /** Mark who is hidden, who already got the selected template, and who can be picked. */
-export function annotate(raw: RawMember[], templateId: number | null, myGroups: Map<string, string[]> = new Map()): Member[] {
+export function annotate(raw: RawMember[], templateId: number | null, myGroups: Map<string, string[]> = new Map(), joins: Map<string, string> = new Map()): Member[] {
   const excluded = new Set((db.prepare('SELECT phone FROM excluded').all() as Array<{ phone: string }>).map((r) => r.phone));
   const names = new Map((db.prepare('SELECT phone, name FROM contact_names').all() as Array<{ phone: string; name: string }>).map((r) => [r.phone, r.name]));
   const sendStatus = new Map<string, string>();
@@ -227,6 +229,7 @@ export function annotate(raw: RawMember[], templateId: number | null, myGroups: 
       excluded: isExcluded,
       sendStatus: status,
       inMyGroups: myGroups.get(m.phone) ?? [],
+      joinedMyGroupAt: joins.get(m.phone) ?? null,
       // failed/cancelled sends can be retried; anything else counts as "already got this template".
       selectable: !isExcluded && (status === null || status === 'failed' || status === 'cancelled'),
     };

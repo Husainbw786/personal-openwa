@@ -1,5 +1,5 @@
 import { useMemo, useRef, useState } from 'react';
-import { api, formatPhone, renderPreview, type GroupDetail as Detail, type Member, type Template } from '../api';
+import { api, formatIso, formatPhone, renderPreview, timeAgo, type GroupDetail as Detail, type Member, type Template } from '../api';
 import { getSendSession, getViewSession, loadSessions, resolveSession, sessionTitle, setSendSession } from '../sessions';
 import { Avatar, Button, Chip, Empty, ErrorBox, Field, Header, Icon, IconButton, Sheet, Spinner, StatusChip, inputClass, toast, useLoad } from '../ui';
 import { Bubble } from './Templates';
@@ -42,9 +42,11 @@ export default function GroupDetail({ source, navigate }: { source: Source; navi
   );
 
   const [menuOpen, setMenuOpen] = useState(false);
+  const [activityOpen, setActivityOpen] = useState(false);
+  const [backupsOpen, setBackupsOpen] = useState(false);
   const [setupOpen, setSetupOpen] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
-  const [filter, setFilter] = useState<'available' | 'all' | 'sent' | 'excluded' | 'admins' | 'notMine'>('available');
+  const [filter, setFilter] = useState<'available' | 'all' | 'sent' | 'excluded' | 'admins' | 'notMine' | 'joined'>('available');
   const [query, setQuery] = useState('');
   const searchRef = useRef<HTMLInputElement>(null);
   const [confirmOpen, setConfirmOpen] = useState(false);
@@ -74,6 +76,7 @@ export default function GroupDetail({ source, navigate }: { source: Source; navi
     excluded: members.filter((m) => m.excluded).length,
     admins: members.filter((m) => m.isAdmin).length,
     notMine: members.filter((m) => !m.inMyGroups?.length && !m.excluded).length,
+    joined: members.filter((m) => m.joinedMyGroupAt && Date.now() - Date.parse(m.joinedMyGroupAt) < 7 * 86_400_000).length,
   }), [members]);
 
   // Admins first (easy to spot), then people with a name: their messages read better ("Hi Rahul" not "Hi there").
@@ -89,6 +92,7 @@ export default function GroupDetail({ source, navigate }: { source: Source; navi
       if (filter === 'excluded') return m.excluded;
       if (filter === 'admins') return m.isAdmin;
       if (filter === 'notMine') return !m.inMyGroups?.length && !m.excluded;
+      if (filter === 'joined') return !!m.joinedMyGroupAt && Date.now() - Date.parse(m.joinedMyGroupAt) < 7 * 86_400_000;
       return true;
     })
     .filter((m) => matchesSearch(m, query));
@@ -215,6 +219,9 @@ export default function GroupDetail({ source, navigate }: { source: Source; navi
         {(group.data?.myGroups?.length ?? 0) > 0 && (
           <Chip active={filter === 'notMine'} onClick={() => setFilter('notMine')}>Not in my group {counts.notMine}</Chip>
         )}
+        {counts.joined > 0 && (
+          <Chip active={filter === 'joined'} onClick={() => setFilter('joined')}>Joined this week {counts.joined}</Chip>
+        )}
         {counts.admins > 0 && <Chip active={filter === 'admins'} onClick={() => setFilter('admins')}>Admins {counts.admins}</Chip>}
         <Chip active={filter === 'excluded'} onClick={() => setFilter('excluded')}>Hidden {counts.excluded}</Chip>
         <Chip active={filter === 'all'} onClick={() => setFilter('all')}>All {members.length || ''}</Chip>
@@ -244,7 +251,11 @@ export default function GroupDetail({ source, navigate }: { source: Source; navi
                   <span className={`min-w-0 flex-1 border-b border-gray-100 py-2.5 ${m.selectable ? '' : 'opacity-55'}`}>
                     <span className="flex items-center gap-2">
                       <span className="min-w-0 flex-1 truncate text-[16px] font-medium">{m.name ?? <span className="font-normal text-muted">No name</span>}</span>
-                      {m.inMyGroups?.length ? (
+                      {m.joinedMyGroupAt ? (
+                        <span title={`Joined ${formatIso(m.joinedMyGroupAt)}`} className="max-w-[10rem] shrink-0 truncate rounded-full bg-green-100 px-2 py-0.5 text-[11px] font-semibold text-green-800">
+                          {group.data?.isMine ? 'Joined' : `Joined ${m.inMyGroups?.[0] ?? 'your group'}`} · {timeAgo(m.joinedMyGroupAt)}
+                        </span>
+                      ) : m.inMyGroups?.length ? (
                         <span title={`Already in ${m.inMyGroups.join(', ')}`} className="max-w-[9rem] shrink-0 truncate rounded-full bg-sky-100 px-2 py-0.5 text-[11px] font-semibold text-sky-800">
                           In {m.inMyGroups[0]}{m.inMyGroups.length > 1 ? ` +${m.inMyGroups.length - 1}` : ''}
                         </span>
@@ -354,6 +365,16 @@ export default function GroupDetail({ source, navigate }: { source: Source; navi
               </span>
             </button>
           )}
+          {source.kind === 'group' && group.data?.isMine && (
+            <>
+              <button onClick={() => { setMenuOpen(false); setActivityOpen(true); }} className="flex w-full items-center gap-4 rounded-xl px-3 py-3 text-left text-[15px] hover:bg-panel">
+                <Icon name="refresh" className="text-muted" /> Joins & leaves
+              </button>
+              <button onClick={() => { setMenuOpen(false); setBackupsOpen(true); }} className="flex w-full items-center gap-4 rounded-xl px-3 py-3 text-left text-[15px] hover:bg-panel">
+                <Icon name="download" className="text-muted" /> Hourly backups
+              </button>
+            </>
+          )}
           {source.kind === 'list' && (
             <button onClick={deleteList} className="flex w-full items-center gap-4 rounded-xl px-3 py-3 text-left text-[15px] text-red-600 hover:bg-red-50">
               <Icon name="trash" /> Delete this list
@@ -362,6 +383,9 @@ export default function GroupDetail({ source, navigate }: { source: Source; navi
           <p className="px-3 pt-2 text-xs text-muted">Upload the CSV in the Lists tab to message these people from another number.</p>
         </div>
       </Sheet>
+
+      {source.kind === 'group' && activityOpen && <ActivitySheet groupId={source.id} onClose={() => setActivityOpen(false)} />}
+      {source.kind === 'group' && backupsOpen && <BackupsSheet groupId={source.id} onClose={() => setBackupsOpen(false)} />}
 
       <Sheet open={confirmOpen} onClose={() => setConfirmOpen(false)} title={`Send to ${selected.size} ${selected.size === 1 ? 'person' : 'people'}`}>
         {sendFrom && (
@@ -431,4 +455,76 @@ function matchesSearch(m: Member, query: string): boolean {
   const digits = q.replace(/\D/g, '').replace(/^0+/, '');
   if (digits.length < 3 || m.phone.endsWith('@lid')) return false;
   return m.phone.includes(digits);
+}
+
+interface ActivityRow { phone: string; name: string | null; at: string }
+
+/** Who joined / left one of your groups in the last 30 days. */
+function ActivitySheet({ groupId, onClose }: { groupId: string; onClose: () => void }) {
+  const { data } = useLoad(() => api<{ trackingSince: string | null; joined: ActivityRow[]; left: ActivityRow[] }>(`/api/my-groups/${encodeURIComponent(groupId)}/activity`), [groupId], { poll: 30_000 });
+  const [tab, setTab] = useState<'joined' | 'left'>('joined');
+  const rows = data ? data[tab] : [];
+  return (
+    <Sheet open onClose={onClose} title="Joins & leaves (30 days)">
+      <div className="mb-3 flex gap-2">
+        <Chip active={tab === 'joined'} onClick={() => setTab('joined')}>Joined {data?.joined.length ?? ''}</Chip>
+        <Chip active={tab === 'left'} onClick={() => setTab('left')}>Left {data?.left.length ?? ''}</Chip>
+      </div>
+      {!data && <Spinner />}
+      {data && rows.length === 0 && <p className="py-6 text-center text-sm text-muted">Nobody {tab === 'joined' ? 'joined' : 'left'} yet.</p>}
+      <ul className="max-h-[50vh] overflow-y-auto">
+        {rows.map((r) => (
+          <li key={`${r.phone}${r.at}`} className="flex items-center gap-3 border-b border-gray-100 py-2.5 text-sm last:border-0">
+            <span className="min-w-0 flex-1">
+              <span className="block truncate text-[15px]">{r.name ?? formatPhone(r.phone)}</span>
+              <span className="block text-xs text-muted">{r.name ? formatPhone(r.phone) : ''}</span>
+            </span>
+            <span className="shrink-0 text-right text-xs text-muted">{timeAgo(r.at)}<span className="block">{formatIso(r.at)}</span></span>
+          </li>
+        ))}
+      </ul>
+      {data?.trackingSince && <p className="pt-3 text-xs text-muted">Watching since {formatIso(data.trackingSince)}. Checked every minute and instantly when WhatsApp reports a change.</p>}
+    </Sheet>
+  );
+}
+
+interface BackupRow { id: number; taken_at: string; member_count: number; joined: number; left_count: number }
+
+/** Hourly CSV snapshots of one of your groups, newest first. */
+function BackupsSheet({ groupId, onClose }: { groupId: string; onClose: () => void }) {
+  const { data, reload } = useLoad(() => api<BackupRow[]>(`/api/my-groups/${encodeURIComponent(groupId)}/backups`), [groupId]);
+  const [busy, setBusy] = useState(false);
+  async function backupNow() {
+    setBusy(true);
+    try {
+      await api(`/api/my-groups/${encodeURIComponent(groupId)}/backup-now`, { method: 'POST' });
+      toast('Backup saved');
+      await reload();
+    } catch (err) {
+      toast(err instanceof Error ? err.message : 'Backup failed');
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <Sheet open onClose={onClose} title="Hourly backups">
+      <p className="mb-3 text-sm text-muted">A full contact list (CSV) is saved every hour and kept for 90 days. Download any of them, or upload one in the Lists tab.</p>
+      <Button variant="ghost" className="mb-3 w-full" disabled={busy} onClick={backupNow}>{busy ? 'Saving…' : 'Back up now'}</Button>
+      {!data && <Spinner />}
+      {data?.length === 0 && <p className="py-4 text-center text-sm text-muted">No backups yet. The first one is taken within a few minutes.</p>}
+      <ul className="max-h-[50vh] overflow-y-auto">
+        {data?.map((b) => (
+          <li key={b.id} className="flex items-center gap-3 border-b border-gray-100 py-2.5 text-sm last:border-0">
+            <span className="min-w-0 flex-1">
+              <span className="block text-[15px]">{formatIso(b.taken_at)}</span>
+              <span className="block text-xs text-muted">
+                {b.member_count} members{b.joined ? ` · +${b.joined} joined` : ''}{b.left_count ? ` · −${b.left_count} left` : ''}
+              </span>
+            </span>
+            <a href={`/api/backups/${b.id}/csv`} download className="rounded-full px-3 py-1.5 text-[13px] font-semibold text-send hover:bg-panel">CSV</a>
+          </li>
+        ))}
+      </ul>
+    </Sheet>
+  );
 }

@@ -3,6 +3,10 @@ import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { config } from '../config.ts';
 import { db } from '../db.ts';
 import { openwa } from '../openwa.ts';
+import { onGroupMembershipEvent } from '../tracker.ts';
+
+/** Delivery ticks, connection state, and joins/leaves (to track "my groups" in real time). */
+const EVENTS = ['message.ack', 'message.failed', 'session.status', 'group.join', 'group.leave'];
 
 // Statuses only move forward: a late "delivered" must not overwrite "read".
 const RANK: Record<string, number> = { sending: 1, sent: 2, delivered: 3, read: 4 };
@@ -33,6 +37,10 @@ export function hookRoutes(app: FastifyInstance): void {
         }
       }
     }
+    if (body.event === 'group.join' || body.event === 'group.leave') {
+      const groupId = String(data.groupId ?? data.chatId ?? '');
+      if (groupId) onGroupMembershipEvent(groupId);
+    }
     return { ok: true };
   });
 }
@@ -42,8 +50,13 @@ export async function registerWebhook(sessionId: string, log: { info: (m: string
   if (!config.webhookUrl) return;
   try {
     const hooks = await openwa.listWebhooks(sessionId);
-    if (hooks.some((h) => h.url === config.webhookUrl)) return;
-    await openwa.createWebhook(sessionId, config.webhookUrl, ['message.ack', 'message.failed', 'session.status'], config.webhookSecret || undefined);
+    const ours = hooks.find((h) => h.url === config.webhookUrl);
+    if (ours) {
+      // Older installs subscribed to fewer events; add the missing ones.
+      if (!EVENTS.every((e) => ours.events.includes(e) || ours.events.includes('*'))) await openwa.updateWebhook(sessionId, ours.id, EVENTS);
+      return;
+    }
+    await openwa.createWebhook(sessionId, config.webhookUrl, EVENTS, config.webhookSecret || undefined);
     log.info(`registered OpenWA webhook for ${sessionId} -> ${config.webhookUrl}`);
   } catch (err) {
     log.warn({ err: String(err) }, 'could not register OpenWA webhook (delivery ticks will not update)');

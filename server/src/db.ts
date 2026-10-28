@@ -81,6 +81,33 @@ db.exec(`
     at    INTEGER NOT NULL
   );
 
+  -- Who is in "my groups", with when they joined/left (diffed on every refresh).
+  CREATE TABLE IF NOT EXISTS member_log (
+    group_id   TEXT NOT NULL,
+    phone      TEXT NOT NULL,
+    name       TEXT,
+    is_admin   INTEGER NOT NULL DEFAULT 0,
+    first_seen TEXT NOT NULL,          -- when we first saw them (= join time unless initial)
+    last_seen  TEXT NOT NULL,
+    left_at    TEXT,                   -- set when they disappear; cleared if they come back
+    initial    INTEGER NOT NULL DEFAULT 0, -- 1 = was already there when tracking started
+    PRIMARY KEY (group_id, phone)
+  );
+  CREATE INDEX IF NOT EXISTS member_log_joined ON member_log(group_id, first_seen);
+
+  -- Hourly contact backups of "my groups".
+  CREATE TABLE IF NOT EXISTS group_backups (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    group_id     TEXT NOT NULL,
+    group_name   TEXT NOT NULL,
+    taken_at     TEXT NOT NULL,
+    member_count INTEGER NOT NULL,
+    joined       INTEGER NOT NULL DEFAULT 0,
+    left_count   INTEGER NOT NULL DEFAULT 0,
+    csv          TEXT NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS group_backups_group ON group_backups(group_id, taken_at);
+
   CREATE TABLE IF NOT EXISTS settings (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL

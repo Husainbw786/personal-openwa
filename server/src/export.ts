@@ -51,12 +51,17 @@ function csvCell(value: string): string {
 }
 
 /** CSV that our own upload understands (name, phone). Excel opens it fine; BOM keeps non-English names intact. */
-export function sendCsv(reply: FastifyReply, title: string, rows: ExportRow[]) {
+/** The CSV text our own upload understands (name, phone, role). BOM keeps non-English names intact in Excel. */
+export function csvText(rows: ExportRow[]): string {
   const lines = ['name,phone,role', ...rows.map((r) => `${csvCell(r.name)},${csvCell(r.hidden ? r.phone : `+${r.phone}`)},${r.admin ? 'admin' : 'member'}`)];
+  return `﻿${lines.join('\r\n')}\r\n`;
+}
+
+export function sendCsv(reply: FastifyReply, title: string, rows: ExportRow[]) {
   return reply
     .header('Content-Type', 'text/csv; charset=utf-8')
     .header('Content-Disposition', `attachment; filename="${encodeURIComponent(fileName(title, 'csv'))}"`)
-    .send(`﻿${lines.join('\r\n')}\r\n`);
+    .send(csvText(rows));
 }
 
 export function sendPdf(reply: FastifyReply, title: string, rows: ExportRow[]) {

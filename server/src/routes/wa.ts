@@ -4,6 +4,7 @@ import { defaultSessionId, forgetDefaultSession, openwa, OpenWAError, setDefault
 import { annotate, cachedCount, forgetSession, getGroupList, groupCount, loadGroupMembers, mapLimit } from '../members.ts';
 import { sendCsv, sendPdf, toRows } from '../export.ts';
 import { getMyGroups, myGroupMembership, setMyGroup } from '../mygroups.ts';
+import { backupGroup, groupActivity, recentJoins, trackGroup } from '../tracker.ts';
 import { registerWebhook } from './hooks.ts';
 import { sessionLabel } from '../queue.ts';
 import { normalizePhone, isValidPhone } from '../phone.ts';
@@ -160,17 +161,51 @@ export function waRoutes(app: FastifyInstance): void {
     return {
       id: req.params.id, kind: 'group', name: group.name, description: group.description, isMine,
       myGroups: getMyGroups().filter((g) => g.groupId !== req.params.id).map((g) => g.name),
-      members: annotate(group.members, templateId, membership),
+      members: annotate(group.members, templateId, membership, recentJoins(30)),
     };
   });
 
   app.get('/api/my-groups', async () => getMyGroups());
 
+  /** Who joined / left one of my groups recently. */
+  app.get<{ Params: { id: string }; Querystring: { days?: string } }>('/api/my-groups/:id/activity', async (req) => {
+    return groupActivity(req.params.id, Math.min(Number(req.query.days) || 30, 365));
+  });
+
+  /** Hourly backups of one of my groups (without the CSV body). */
+  app.get<{ Params: { id: string } }>('/api/my-groups/:id/backups', async (req) => {
+    return db.prepare('SELECT id, group_name, taken_at, member_count, joined, left_count FROM group_backups WHERE group_id = ? ORDER BY taken_at DESC LIMIT 500').all(req.params.id);
+  });
+
+  app.post<{ Params: { id: string } }>('/api/my-groups/:id/backup-now', async (req, reply) => {
+    const g = getMyGroups().find((x) => x.groupId === req.params.id);
+    if (!g) return reply.code(404).send({ message: 'Not one of your groups' });
+    await trackGroup(g);
+    return { id: await backupGroup(g) };
+  });
+
+  app.get<{ Params: { id: string } }>('/api/backups/:id/csv', async (req, reply) => {
+    const row = db.prepare('SELECT group_name, taken_at, csv FROM group_backups WHERE id = ?').get(Number(req.params.id)) as { group_name: string; taken_at: string; csv: string } | undefined;
+    if (!row) return reply.code(404).send({ message: 'Backup not found' });
+    const stamp = new Date(row.taken_at).toLocaleString('sv-SE', { timeZone: 'Asia/Kolkata' }).slice(0, 16).replace(/[: ]/g, '-');
+    const safe = row.group_name.replace(/[^\p{L}\p{N} _-]+/gu, '').trim().replace(/\s+/g, '-').slice(0, 50) || 'group';
+    return reply
+      .header('Content-Type', 'text/csv; charset=utf-8')
+      .header('Content-Disposition', `attachment; filename="${encodeURIComponent(`${safe}-${stamp}.csv`)}"`)
+      .send(row.csv);
+  });
+
   /** Mark or unmark a group as one of yours. */
   app.put<{ Params: { id: string }; Body: { mine: boolean; name?: string }; Querystring: { session?: string } }>('/api/my-groups/:id', async (req) => {
     const sessionId = await pickSession(req.query);
     const name = req.body?.name || (await loadGroupMembers(sessionId, req.params.id)).name;
-    return setMyGroup({ sessionId, groupId: req.params.id, name }, !!req.body?.mine);
+    const groups = setMyGroup({ sessionId, groupId: req.params.id, name }, !!req.body?.mine);
+    // Start tracking (and take a first backup) right away.
+    if (req.body?.mine) {
+      const g = { sessionId, groupId: req.params.id, name };
+      void trackGroup(g).then(() => backupGroup(g)).catch(() => {});
+    }
+    return groups;
   });
 
   app.get<{ Params: { id: string; format: string }; Querystring: { session?: string } }>('/api/groups/:id/export.:format', async (req, reply) => {

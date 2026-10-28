@@ -67,6 +67,8 @@ export interface Member {
   selectable: boolean;
   /** Names of your own groups this person is already in. */
   inMyGroups?: string[];
+  /** When they joined one of your groups (ISO), if it happened while the app was watching. */
+  joinedMyGroupAt?: string | null;
 }
 
 export interface ContactList {
@@ -142,6 +144,22 @@ export function formatPhone(phone: string): string {
 }
 
 /** SQLite stores UTC as "YYYY-MM-DD HH:MM:SS"; show it in local time. */
+/** "just now", "5m ago", "3h ago", "2d ago" for an ISO time. */
+export function timeAgo(iso: string | null | undefined): string {
+  if (!iso) return '';
+  const s = Math.max(0, (Date.now() - Date.parse(iso)) / 1000);
+  if (s < 60) return 'just now';
+  if (s < 3600) return `${Math.floor(s / 60)}m ago`;
+  if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
+  return `${Math.floor(s / 86400)}d ago`;
+}
+
+/** Local date+time for an ISO time, e.g. "28 Oct, 2:05 pm". */
+export function formatIso(iso: string | null | undefined): string {
+  if (!iso) return '';
+  return new Date(iso).toLocaleString(undefined, { day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' });
+}
+
 export function formatTime(sqliteUtc: string | null): string {
   if (!sqliteUtc) return '';
   const d = new Date(`${sqliteUtc.replace(' ', 'T')}Z`);

@@ -170,6 +170,9 @@ export const openwa = {
   async listWebhooks(sessionId: string): Promise<Array<{ id: string; url: string; events: string[] }>> {
     return call('GET', `${base(sessionId)}/webhooks`);
   },
+  async updateWebhook(sessionId: string, webhookId: string, events: string[]): Promise<void> {
+    await call('PUT', `${base(sessionId)}/webhooks/${enc(webhookId)}`, { events });
+  },
   async createWebhook(sessionId: string, url: string, events: string[], secret?: string): Promise<void> {
     await call('POST', `${base(sessionId)}/webhooks`, { url, events, ...(secret ? { secret } : {}), retryCount: 3 });
   },

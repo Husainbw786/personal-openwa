@@ -10,6 +10,7 @@ import { authRoutes, requireLogin } from './auth.ts';
 import { ensureSession, openwa, OpenWAError } from './openwa.ts';
 import { startWorker } from './queue.ts';
 import { startWarmer } from './warmer.ts';
+import { startTracker } from './tracker.ts';
 import { loadSnapshots } from './members.ts';
 import { waRoutes } from './routes/wa.ts';
 import { templateRoutes } from './routes/templates.ts';
@@ -104,6 +105,7 @@ await app.listen({ port: config.port, host: config.host });
     }
     startWorker({ info: (o, m) => app.log.info(o, m), warn: (o, m) => app.log.warn(o, m) });
     startWarmer({ info: (o, m) => app.log.info(o, m), warn: (o, m) => app.log.warn(o, m) });
+    startTracker({ info: (o, m) => app.log.info(o, m), warn: (o, m) => app.log.warn(o, m) });
   } catch (err) {
     const delay = Math.min(attempt * 2000, 30_000);
     app.log.warn({ err: String(err) }, `OpenWA not ready, retrying in ${delay / 1000}s`);
