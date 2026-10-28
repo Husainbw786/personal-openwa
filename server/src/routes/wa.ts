@@ -6,6 +6,7 @@ import { sendCsv, sendPdf, toRows } from '../export.ts';
 import { getMyGroups, myGroupMembership, setMyGroup } from '../mygroups.ts';
 import { registerWebhook } from './hooks.ts';
 import { sessionLabel } from '../queue.ts';
+import { normalizePhone, isValidPhone } from '../phone.ts';
 
 
 /** Which linked number a request is about: `?session=<id>`, or the default number. */
@@ -69,6 +70,18 @@ export function waRoutes(app: FastifyInstance): void {
     await openwa.logout(req.params.id);
     forgetSession(req.params.id);
     return { ok: true };
+  });
+
+  /** Phone-number linking, for when the QR code is on the same phone and can't be scanned. */
+  app.post<{ Params: { id: string }; Body: { phone?: string } }>('/api/wa/sessions/:id/pairing-code', async (req, reply) => {
+    const phone = normalizePhone(String(req.body?.phone ?? ''));
+    if (!isValidPhone(phone)) return reply.code(400).send({ message: 'Enter the WhatsApp number you are linking, with country code (e.g. 91 98123 45678)' });
+    const session = await openwa.getSession(req.params.id);
+    if (session.status !== 'qr_ready') {
+      return reply.code(409).send({ message: 'This number is not waiting to be linked yet. Wait a few seconds and try again.' });
+    }
+    const { pairingCode } = await openwa.requestPairingCode(req.params.id, phone);
+    return { pairingCode };
   });
 
   app.post<{ Params: { id: string } }>('/api/wa/sessions/:id/restart', async (req) => {

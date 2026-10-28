@@ -146,6 +146,10 @@ export const openwa = {
   async getQr(sessionId: string): Promise<{ qrCode: string; status: SessionStatus }> {
     return call('GET', `${base(sessionId)}/qr`);
   },
+  /** Link without scanning: WhatsApp → Linked devices → Link with phone number instead, then type this code. */
+  async requestPairingCode(sessionId: string, phoneNumber: string): Promise<{ pairingCode: string; status: SessionStatus }> {
+    return call('POST', `${base(sessionId)}/pairing-code`, { phoneNumber });
+  },
   async listGroups(sessionId: string): Promise<GroupSummary[]> {
     return call('GET', `${base(sessionId)}/groups?limit=1000`);
   },
