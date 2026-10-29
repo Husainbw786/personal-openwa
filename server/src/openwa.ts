@@ -44,8 +44,8 @@ export class OpenWAError extends Error {
   }
 }
 
-async function call<T>(method: string, path: string, body?: unknown, headers: Record<string, string> = {}): Promise<T> {
-  const res = await fetch(`${config.openwaUrl}${path}`, {
+async function call<T>(method: string, path: string, body?: unknown, headers: Record<string, string> = {}, gateway = config.openwaUrl): Promise<T> {
+  const res = await fetch(`${gateway}${path}`, {
     method,
     headers: {
       'X-API-Key': config.openwaApiKey,
@@ -86,7 +86,7 @@ const enc = encodeURIComponent;
 let defaultId: string | null = null;
 
 export async function ensureSession(): Promise<Session> {
-  const sessions = await call<Session[]>('GET', '/api/sessions');
+  const sessions = await openwa.listSessions();
   const saved = getSetting('default_session', '');
   let session =
     sessions.find((s) => s.id === saved) ??
@@ -118,62 +118,103 @@ export function forgetDefaultSession(removedId: string): void {
 
 const base = (sessionId: string) => `/api/sessions/${enc(sessionId)}`;
 
+/**
+ * Two gateways can run side by side: the original one (Baileys engine) and, if OPENWA_WEB_URL is set,
+ * one with the Chromium engine (whatsapp-web.js). The engine is per gateway, so each number lives on
+ * one of them; calls for a number go to the gateway that has it.
+ */
+const gateways = () => [config.openwaUrl, ...(config.openwaWebUrl ? [config.openwaWebUrl] : [])];
+const gatewayOf = new Map<string, string>();
+
+async function listAll(): Promise<Session[]> {
+  const lists = await Promise.all(gateways().map(async (gw, i) => {
+    try {
+      const sessions = await call<Session[]>('GET', '/api/sessions', undefined, {}, gw);
+      for (const s of sessions) gatewayOf.set(s.id, gw);
+      return sessions;
+    } catch (err) {
+      if (i === 0) throw err; // the main gateway must answer; a down Chromium gateway just hides its numbers
+      return [];
+    }
+  }));
+  return lists.flat();
+}
+
+async function gatewayFor(sessionId: string): Promise<string> {
+  if (!gatewayOf.has(sessionId)) await listAll();
+  return gatewayOf.get(sessionId) ?? config.openwaUrl;
+}
+
+/** True when this number runs on the Chromium (whatsapp-web.js) gateway. */
+export async function isChromium(sessionId: string): Promise<boolean> {
+  return !!config.openwaWebUrl && (await gatewayFor(sessionId)) === config.openwaWebUrl;
+}
+
+/** A call about one number, sent to the gateway that holds it. */
+async function scall<T>(sessionId: string, method: string, sub: string, body?: unknown, headers: Record<string, string> = {}): Promise<T> {
+  return call<T>(method, `${base(sessionId)}${sub}`, body, headers, await gatewayFor(sessionId));
+}
+
 export const openwa = {
   async listSessions(): Promise<Session[]> {
-    return call('GET', '/api/sessions');
+    return listAll();
   },
+  /** New numbers go on the Chromium gateway when there is one. */
   async createSession(name: string): Promise<Session> {
-    return call('POST', '/api/sessions', { name });
+    const gw = config.openwaWebUrl || config.openwaUrl;
+    const session = await call<Session>('POST', '/api/sessions', { name }, {}, gw);
+    gatewayOf.set(session.id, gw);
+    return session;
   },
   async deleteSession(sessionId: string): Promise<void> {
-    await call('DELETE', base(sessionId));
+    await scall(sessionId, 'DELETE', '');
   },
   async getSession(sessionId: string): Promise<Session> {
-    return call<Session>('GET', base(sessionId));
+    return scall(sessionId, 'GET', '');
   },
   async start(sessionId: string): Promise<void> {
-    await call('POST', `${base(sessionId)}/start`);
+    await scall(sessionId, 'POST', `/start`);
   },
   /** Stop and start again; for a connection stuck on "reconnecting". Force-kills if a normal stop hangs. */
   async restart(sessionId: string): Promise<void> {
-    await call('POST', `${base(sessionId)}/stop`).catch(() => call('POST', `${base(sessionId)}/force-kill`));
+    await scall(sessionId, 'POST', `/stop`).catch(() => scall(sessionId, 'POST', `/force-kill`));
     await new Promise((r) => setTimeout(r, 2000));
-    await call('POST', `${base(sessionId)}/start`);
+    await scall(sessionId, 'POST', `/start`);
   },
   async logout(sessionId: string): Promise<void> {
-    await call('POST', `${base(sessionId)}/logout`);
+    await scall(sessionId, 'POST', `/logout`);
   },
   async getQr(sessionId: string): Promise<{ qrCode: string; status: SessionStatus }> {
-    return call('GET', `${base(sessionId)}/qr`);
+    return scall(sessionId, 'GET', `/qr`);
   },
   /** Link without scanning: WhatsApp → Linked devices → Link with phone number instead, then type this code. */
   async requestPairingCode(sessionId: string, phoneNumber: string): Promise<{ pairingCode: string; status: SessionStatus }> {
-    return call('POST', `${base(sessionId)}/pairing-code`, { phoneNumber });
+    return scall(sessionId, 'POST', `/pairing-code`, { phoneNumber });
   },
   async listGroups(sessionId: string): Promise<GroupSummary[]> {
-    return call('GET', `${base(sessionId)}/groups?limit=1000`);
+    return scall(sessionId, 'GET', `/groups?limit=1000`);
   },
   async getGroup(sessionId: string, groupId: string): Promise<GroupInfo> {
-    return call('GET', `${base(sessionId)}/groups/${enc(groupId)}`);
+    return scall(sessionId, 'GET', `/groups/${enc(groupId)}`);
   },
   async listContacts(sessionId: string): Promise<Array<{ id: string; number?: string; name?: string }>> {
-    return call('GET', `${base(sessionId)}/contacts`);
+    return scall(sessionId, 'GET', `/contacts`);
   },
   async resolvePhone(sessionId: string, contactId: string): Promise<string | null> {
-    const res = await call<{ phone: string | null }>('GET', `${base(sessionId)}/contacts/${enc(contactId)}/phone`);
+    const res = await scall<{ phone: string | null }>(sessionId, 'GET', `/contacts/${enc(contactId)}/phone`);
     return res.phone;
   },
   /** idempotencyKey makes a retry after a crash safe: OpenWA replays the first result instead of sending twice. */
   async sendText(sessionId: string, chatId: string, text: string, idempotencyKey: string): Promise<{ messageId: string }> {
-    return call('POST', `${base(sessionId)}/messages/send-text`, { chatId, text }, { 'Idempotency-Key': idempotencyKey });
+    return scall(sessionId, 'POST', `/messages/send-text`, { chatId, text }, { 'Idempotency-Key': idempotencyKey });
   },
   async listWebhooks(sessionId: string): Promise<Array<{ id: string; url: string; events: string[] }>> {
-    return call('GET', `${base(sessionId)}/webhooks`);
+    return scall(sessionId, 'GET', `/webhooks`);
   },
   async updateWebhook(sessionId: string, webhookId: string, events: string[]): Promise<void> {
-    await call('PUT', `${base(sessionId)}/webhooks/${enc(webhookId)}`, { events });
+    await scall(sessionId, 'PUT', `/webhooks/${enc(webhookId)}`, { events });
   },
   async createWebhook(sessionId: string, url: string, events: string[], secret?: string): Promise<void> {
-    await call('POST', `${base(sessionId)}/webhooks`, { url, events, ...(secret ? { secret } : {}), retryCount: 3 });
+    await scall(sessionId, 'POST', `/webhooks`, { url, events, ...(secret ? { secret } : {}), retryCount: 3 });
   },
 };

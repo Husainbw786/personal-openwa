@@ -25,14 +25,38 @@ services:
     ports:
       - "127.0.0.1:2785:2785"               # OpenWA's own dashboard, only reachable from this computer
 
+  # Same gateway, Chromium engine (whatsapp-web.js): a real WhatsApp Web page per number. Heavier than
+  # Baileys but behaves exactly like WhatsApp Web, incl. "Link with phone number". New numbers go here;
+  # the main number stays on the Baileys gateway above (switching engines means re-linking).
+  openwa-web:
+    image: ghcr.io/rmyndharis/openwa:${OPENWA_VERSION:-0.24.0}
+    restart: unless-stopped
+    shm_size: 1gb                           # Chromium crashes with Docker's 64 MB default
+    environment:
+      NODE_ENV: production
+      TZ: ${TZ_APP:-Asia/Kolkata}
+      ENGINE_TYPE: whatsapp-web.js
+      API_MASTER_KEY: ${OPENWA_API_KEY}
+      AUTO_START_SESSIONS: "true"
+      SEND_PACING_ENABLED: "true"
+      SSRF_ALLOWED_HOSTS: wa-app
+      CSP_UPGRADE_INSECURE_REQUESTS: "false"
+      RATE_LIMIT_SHORT_LIMIT: "5000"
+      RATE_LIMIT_MEDIUM_LIMIT: "200000"
+      RATE_LIMIT_LONG_LIMIT: "10000000"
+    volumes:
+      - openwa-web-data:/app/data
+
   wa-app:
     build: .
     restart: unless-stopped
     depends_on:
       - openwa
+      - openwa-web
     env_file: .env
     environment:
       OPENWA_URL: http://openwa:2785
+      OPENWA_WEB_URL: http://openwa-web:2785
       WEBHOOK_URL: http://wa-app:3000/hooks/openwa
     volumes:
       - app-data:/app/data                  # templates, send history, hidden numbers
@@ -41,4 +65,5 @@ services:
 
 volumes:
   openwa-data:
+  openwa-web-data:
   app-data:

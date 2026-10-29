@@ -23,6 +23,8 @@ export const config = {
 
   openwaUrl: (process.env.OPENWA_URL ?? 'http://localhost:2785').replace(/\/$/, ''),
   openwaApiKey: required('OPENWA_API_KEY'),
+  // Optional second gateway running the Chromium engine (whatsapp-web.js); new numbers are linked there.
+  openwaWebUrl: (process.env.OPENWA_WEB_URL ?? '').replace(/\/$/, ''),
   openwaSessionName: process.env.OPENWA_SESSION ?? 'main',
 
   // URL OpenWA uses to reach our webhook receiver. Leave empty to skip delivery/read tracking.

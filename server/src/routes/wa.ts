@@ -1,6 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import { db } from '../db.ts';
-import { defaultSessionId, forgetDefaultSession, openwa, OpenWAError, setDefaultSession, type Session } from '../openwa.ts';
+import { defaultSessionId, forgetDefaultSession, isChromium, openwa, OpenWAError, setDefaultSession, type Session } from '../openwa.ts';
 import { annotate, cachedCount, forgetSession, getGroupList, groupCount, loadGroupMembers, mapLimit } from '../members.ts';
 import { sendCsv, sendPdf, toRows } from '../export.ts';
 import { getMyGroups, myGroupMembership, setMyGroup } from '../mygroups.ts';
@@ -11,6 +11,21 @@ import { normalizePhone, isValidPhone } from '../phone.ts';
 
 /** A fresh connection lives ~140s (QR at 60s, then 4 × 20s) before it resets; keep a margin. */
 const CODE_VALID_SEC = 120;
+
+const pairingJobs = new Map<string, Promise<string | null>>();
+
+async function makePairingCode(sessionId: string, phone: string): Promise<string | null> {
+  // On Baileys the waiting connection resets every ~2.5 min and any code made on the old one stops
+  // working, so start a fresh connection first. Chromium keeps its page open, no restart needed.
+  const chromium = await isChromium(sessionId);
+  if (!chromium) await openwa.restart(sessionId);
+  const deadline = Date.now() + (chromium ? 90_000 : 25_000); // Chromium takes a while to launch
+  while ((await openwa.getSession(sessionId)).status !== 'qr_ready') {
+    if (Date.now() > deadline) return null;
+    await new Promise((r) => setTimeout(r, 1000));
+  }
+  return (await openwa.requestPairingCode(sessionId, phone)).pairingCode;
+}
 
 
 /** Which linked number a request is about: `?session=<id>`, or the default number. */
@@ -80,17 +95,17 @@ export function waRoutes(app: FastifyInstance): void {
   app.post<{ Params: { id: string }; Body: { phone?: string } }>('/api/wa/sessions/:id/pairing-code', async (req, reply) => {
     const phone = normalizePhone(String(req.body?.phone ?? ''));
     if (!isValidPhone(phone)) return reply.code(400).send({ message: 'Enter the WhatsApp number you are linking, with country code (e.g. 91 98123 45678)' });
-    const session = await openwa.getSession(req.params.id);
+    const id = req.params.id;
+    const session = await openwa.getSession(id);
     if (session.status === 'ready') return reply.code(409).send({ message: 'This number is already connected.' });
-    // While waiting to be linked, WhatsApp's connection resets every ~2.5 min and any code made on the old
-    // connection stops working. Start a fresh connection so the code gets the full window.
-    await openwa.restart(req.params.id);
-    const deadline = Date.now() + 25_000;
-    while ((await openwa.getSession(req.params.id)).status !== 'qr_ready') {
-      if (Date.now() > deadline) return reply.code(503).send({ message: 'WhatsApp is slow to respond. Try again in a few seconds.' });
-      await new Promise((r) => setTimeout(r, 1000));
+    // A second tap while the first code is being made would reset the connection and kill that code.
+    let job = pairingJobs.get(id);
+    if (!job) {
+      job = makePairingCode(id, phone).finally(() => pairingJobs.delete(id));
+      pairingJobs.set(id, job);
     }
-    const { pairingCode } = await openwa.requestPairingCode(req.params.id, phone);
+    const pairingCode = await job;
+    if (!pairingCode) return reply.code(503).send({ message: 'WhatsApp is slow to respond. Try again in a few seconds.' });
     return { pairingCode, validForSec: CODE_VALID_SEC };
   });
 

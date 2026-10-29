@@ -18,6 +18,10 @@ services:
     environment:
       NODE_OPTIONS: --max-old-space-size=6144
 
+  # Chromium: roughly 300-500 MB per linked number.
+  openwa-web:
+    mem_limit: 4g
+
   caddy:
     image: caddy:2.10-alpine
     restart: unless-stopped
