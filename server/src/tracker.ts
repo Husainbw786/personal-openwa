@@ -99,7 +99,7 @@ export async function backupGroup(g: MyGroup): Promise<number> {
   const res = db.prepare('INSERT INTO group_backups (group_id, group_name, taken_at, member_count, joined, left_count, csv) VALUES (?, ?, ?, ?, ?, ?, ?)')
     .run(g.groupId, data.name || g.name, now(), data.members.length, prev ? joined : 0, prev ? left : 0, csv);
   db.prepare('DELETE FROM group_backups WHERE taken_at < ?').run(new Date(Date.now() - KEEP_BACKUPS_DAYS * 86_400_000).toISOString());
-  writeBackupFiles(g, data.name || g.name, csv);
+  writeBackupFiles(g, data.name || g.name, csv, { members: data.members.length, joined: prev ? joined : 0, left: prev ? left : 0, first: !prev });
   return Number(res.lastInsertRowid);
 }
 
@@ -108,7 +108,7 @@ function csvCell(value: string): string {
 }
 
 /** <BACKUP_DIR>/<group>/members.csv (current list) and joins-leaves.csv (every join/leave so far). */
-function writeBackupFiles(g: MyGroup, name: string, membersCsv: string): void {
+function writeBackupFiles(g: MyGroup, name: string, membersCsv: string, stats: { members: number; joined: number; left: number; first: boolean }): void {
   if (!existsSync(BACKUP_DIR)) return;
   try {
     const slug = name.replace(/[^\p{L}\p{N} _-]+/gu, '').trim().replace(/\s+/g, '-').slice(0, 60) || g.groupId;
@@ -124,6 +124,25 @@ function writeBackupFiles(g: MyGroup, name: string, membersCsv: string): void {
     const ist = (iso: string) => new Date(iso).toLocaleString('sv-SE', { timeZone: 'Asia/Kolkata' });
     const lines = ['time_ist,event,name,phone', ...events.map((e) => [ist(e.at), e.event, csvCell(e.name ?? ''), e.phone.endsWith('@lid') ? e.phone : `+${e.phone}`].join(','))];
     writeFileSync(join(dir, 'joins-leaves.csv'), `\ufeff${lines.join('\r\n')}\r\n`);
+
+    // Changes every hour, so every backup shows up as a commit, even when nobody joined or left.
+    const change = stats.first ? 'first backup' : stats.joined || stats.left
+      ? [stats.joined && `+${stats.joined} joined`, stats.left && `-${stats.left} left`].filter(Boolean).join(', ')
+      : 'no change';
+    const nowIst = ist(new Date().toISOString());
+    writeFileSync(join(dir, 'status.md'), [
+      `# ${name}`,
+      '',
+      `- **Last checked:** ${nowIst} IST`,
+      `- **Members:** ${stats.members}`,
+      `- **Since the previous hourly backup:** ${change}`,
+      `- **Joins / leaves recorded so far:** ${events.filter((e) => e.event === 'joined').length} / ${events.filter((e) => e.event === 'left').length}`,
+      '',
+      'Checked every minute (and instantly on WhatsApp join/leave events); backed up every hour.',
+      '',
+    ].join('\n'));
+    // One line per group for the commit message.
+    writeFileSync(join(dir, '.summary'), `${name}: ${stats.members} members, ${change}`);
   } catch (err) {
     log.warn({ err: String(err) }, 'could not write backup files');
   }
