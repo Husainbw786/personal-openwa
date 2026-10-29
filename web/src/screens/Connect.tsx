@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { api, formatPhone, type WaSession } from '../api';
 import { loadSessions } from '../sessions';
 import { Avatar, Button, ErrorBox, Field, Header, Icon, Sheet, Spinner, inputClass, toast, useLoad } from '../ui';
@@ -99,6 +99,14 @@ function SessionCard({ session: s, busy, onStart, onLogout, onRemove, onRestart,
   onRestart: () => void;
   onMakeMain: () => void;
 }) {
+  // Getting a phone-number code restarts the connection, so the status blinks to "initializing";
+  // keep the link box (and the code in it) on screen through that.
+  const [linking, setLinking] = useState(s.status === 'qr_ready');
+  useEffect(() => {
+    if (s.status === 'qr_ready') setLinking(true);
+    else if (s.status !== 'initializing') setLinking(false);
+  }, [s.status]);
+  const showLink = s.status === 'qr_ready' || (linking && s.status === 'initializing');
   return (
     <div className="border-b-8 border-panel">
       <div className="flex items-center gap-4 px-4 py-3">
@@ -116,9 +124,9 @@ function SessionCard({ session: s, busy, onStart, onLogout, onRemove, onRestart,
         </div>
       )}
 
-      {s.status === 'qr_ready' && <LinkChooser session={s} />}
+      {showLink && <LinkChooser session={s} />}
 
-      {(s.status === 'initializing' || s.status === 'authenticating') && (
+      {((s.status === 'initializing' && !showLink) || s.status === 'authenticating') && (
         <>
           <Spinner />
           <p className="text-sm text-muted">{s.status === 'authenticating' ? 'Linking the phone…' : 'Starting WhatsApp…'}</p>
@@ -193,13 +201,24 @@ function LinkChooser({ session: s }: { session: WaSession }) {
 function PairingCode({ sessionId }: { sessionId: string }) {
   const [phone, setPhone] = useState('');
   const [code, setCode] = useState<string | null>(null);
+  const [expiresAt, setExpiresAt] = useState(0);
+  const [now, setNow] = useState(Date.now());
   const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (!code) return;
+    const t = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, [code]);
+  const secondsLeft = Math.max(0, Math.round((expiresAt - now) / 1000));
 
   async function getCode() {
     setBusy(true);
     try {
-      const res = await api<{ pairingCode: string }>(`/api/wa/sessions/${encodeURIComponent(sessionId)}/pairing-code`, { method: 'POST', body: { phone } });
+      const res = await api<{ pairingCode: string; validForSec?: number }>(`/api/wa/sessions/${encodeURIComponent(sessionId)}/pairing-code`, { method: 'POST', body: { phone } });
       setCode(res.pairingCode);
+      setExpiresAt(Date.now() + (res.validForSec ?? 120) * 1000);
+      setNow(Date.now());
     } catch (err) {
       toast(err instanceof Error ? err.message : 'Could not get a code. Try again in a few seconds.');
     } finally {
@@ -242,17 +261,26 @@ function PairingCode({ sessionId }: { sessionId: string }) {
       ) : (
         <>
           <p className="mb-2 text-center font-semibold">Your code</p>
-          <button onClick={copy} className="mx-auto mb-1 block rounded-xl bg-panel px-5 py-3 font-mono text-3xl font-semibold tracking-[0.2em]" aria-label={`Pairing code ${pretty}, tap to copy`}>
+          <button onClick={copy} disabled={secondsLeft === 0} className={`mx-auto mb-1 block rounded-xl bg-panel px-5 py-3 font-mono text-3xl font-semibold tracking-[0.2em] ${secondsLeft === 0 ? 'text-muted line-through' : ''}`} aria-label={`Pairing code ${pretty}, tap to copy`}>
             {pretty}
           </button>
-          <p className="mb-4 text-center text-xs text-muted">Tap to copy</p>
+          {secondsLeft > 0 ? (
+            <p className={`mb-4 text-center text-xs ${secondsLeft <= 30 ? 'font-semibold text-red-700' : 'text-muted'}`}>
+              Tap to copy · works for {Math.floor(secondsLeft / 60)}:{String(secondsLeft % 60).padStart(2, '0')}
+            </p>
+          ) : (
+            <div className="mb-4 text-center">
+              <p className="mb-2 text-sm font-semibold text-red-700">This code has expired.</p>
+              <Button disabled={busy} onClick={getCode}>{busy ? 'Getting…' : 'Get a fresh code'}</Button>
+            </div>
+          )}
           <ol className="list-decimal space-y-1 pl-5 text-sm">
             <li>Open <b>WhatsApp</b> on the phone with this number.</li>
             <li>Go to <b>Settings → Linked devices → Link a device</b>.</li>
             <li>Tap <b>Link with phone number instead</b>.</li>
-            <li>Type the code above. It expires in a few minutes.</li>
+            <li>Type the code above <b>before the timer runs out</b>. Check the number is <b>{phone}</b>: the code only works on that WhatsApp account.</li>
           </ol>
-          <button onClick={() => setCode(null)} className="mt-4 block w-full text-center text-sm font-semibold text-send">Get a new code</button>
+          <button onClick={() => setCode(null)} className="mt-4 block w-full text-center text-sm font-semibold text-send">Use a different number</button>
         </>
       )}
     </div>

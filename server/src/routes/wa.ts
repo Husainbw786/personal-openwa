@@ -9,6 +9,9 @@ import { registerWebhook } from './hooks.ts';
 import { sessionLabel } from '../queue.ts';
 import { normalizePhone, isValidPhone } from '../phone.ts';
 
+/** A fresh connection lives ~140s (QR at 60s, then 4 × 20s) before it resets; keep a margin. */
+const CODE_VALID_SEC = 120;
+
 
 /** Which linked number a request is about: `?session=<id>`, or the default number. */
 async function pickSession(query: { session?: string }): Promise<string> {
@@ -78,11 +81,17 @@ export function waRoutes(app: FastifyInstance): void {
     const phone = normalizePhone(String(req.body?.phone ?? ''));
     if (!isValidPhone(phone)) return reply.code(400).send({ message: 'Enter the WhatsApp number you are linking, with country code (e.g. 91 98123 45678)' });
     const session = await openwa.getSession(req.params.id);
-    if (session.status !== 'qr_ready') {
-      return reply.code(409).send({ message: 'This number is not waiting to be linked yet. Wait a few seconds and try again.' });
+    if (session.status === 'ready') return reply.code(409).send({ message: 'This number is already connected.' });
+    // While waiting to be linked, WhatsApp's connection resets every ~2.5 min and any code made on the old
+    // connection stops working. Start a fresh connection so the code gets the full window.
+    await openwa.restart(req.params.id);
+    const deadline = Date.now() + 25_000;
+    while ((await openwa.getSession(req.params.id)).status !== 'qr_ready') {
+      if (Date.now() > deadline) return reply.code(503).send({ message: 'WhatsApp is slow to respond. Try again in a few seconds.' });
+      await new Promise((r) => setTimeout(r, 1000));
     }
     const { pairingCode } = await openwa.requestPairingCode(req.params.id, phone);
-    return { pairingCode };
+    return { pairingCode, validForSec: CODE_VALID_SEC };
   });
 
   app.post<{ Params: { id: string } }>('/api/wa/sessions/:id/restart', async (req) => {
