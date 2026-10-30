@@ -1,5 +1,5 @@
-# --- build the frontend ---
-FROM node:24-alpine AS web
+# --- build the frontend (plain static files, so build it natively even when targeting ARM) ---
+FROM --platform=$BUILDPLATFORM node:24-alpine AS web
 WORKDIR /web
 COPY web/package.json web/package-lock.json ./
 RUN npm ci --no-fund --no-audit
