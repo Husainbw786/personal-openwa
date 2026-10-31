@@ -61,9 +61,9 @@ configs:
           }
           handle {
             rewrite * /mcp
-            reverse_proxy openwa-web:2785 {
+            reverse_proxy wa-app:3000 {
               header_up Authorization "Bearer {$$MCP_AGENT_KEY}"
-              header_up Accept "application/json, text/event-stream"
+              flush_interval -1
             }
           }
         }

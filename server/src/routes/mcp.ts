@@ -4,6 +4,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { config } from '../config.ts';
 import { db } from '../db.ts';
 import { samePassword } from '../auth.ts';
+import { openwa } from '../openwa.ts';
 
 /**
  * AI agents (MCP). /mcp forwards to OpenWA's built-in MCP server on the Chromium gateway.
@@ -100,7 +101,46 @@ function consentPage(params: Record<string, string>, clientName: string, error =
 </form></body></html>`;
 }
 
-const AUTHORIZE_PARAMS = ['response_type', 'client_id', 'redirect_uri', 'code_challenge', 'code_challenge_method', 'state', 'scope', 'resource'];
+/** "main" is the business number; other numbers go by their session name ("personal" → "Personal"). */
+const numberLabel = (name: string) => (name === config.openwaSessionName ? 'Business' : name.charAt(0).toUpperCase() + name.slice(1));
+
+/**
+ * Tells agents which linked number is which, and to ask before the first WhatsApp action when the user
+ * hasn't said. Goes into the server instructions and into every tool that takes a sessionId, since not
+ * every client reads server instructions.
+ */
+async function numbersGuide(): Promise<{ instructions: string; sessionHint: string } | null> {
+  const sessions = (await openwa.listSessions().catch(() => [])).filter((s) => s.phone);
+  if (sessions.length === 0) return null;
+  const list = sessions.map((s) => `${numberLabel(s.name)} (+${s.phone}) = sessionId "${s.id}"`);
+  const ask = sessions.length > 1
+    ? 'If the user has not said which number to use, ask them first ("Personal or Business?"), then keep using that number until they say otherwise.'
+    : '';
+  return {
+    instructions: `This server controls the user's WhatsApp. Linked numbers:\n${list.map((l) => `- ${l}`).join('\n')}\n` +
+      `When the user names a number ("my personal number", "business"), use the matching sessionId. ${ask}`.trim(),
+    sessionHint: `Which WhatsApp number: ${list.join('; ')}. ${ask}`.trim(),
+  };
+}
+
+type Rpc = { result?: { instructions?: string; tools?: Array<{ description?: string; inputSchema?: { properties?: Record<string, { description?: string }> } }> } };
+
+/** Applies `edit` to each JSON-RPC message in a reply, whether it came back as plain JSON or as an event stream. */
+function editRpc(text: string, contentType: string, edit: (msg: Rpc) => void): string {
+  const apply = (json: string) => {
+    const msg = JSON.parse(json) as Rpc;
+    edit(msg);
+    return JSON.stringify(msg);
+  };
+  try {
+    if (contentType.includes('text/event-stream')) return text.replace(/^data: (.+)$/gm, (_line, json: string) => `data: ${apply(json)}`);
+    return apply(text);
+  } catch {
+    return text;
+  }
+}
+
+const AUTHORIZE_PARAMS =['response_type', 'client_id', 'redirect_uri', 'code_challenge', 'code_challenge_method', 'state', 'scope', 'resource'];
 
 let failedAttempts = 0;
 
@@ -274,6 +314,24 @@ export function mcpRoutes(app: FastifyInstance): void {
       for (const h of ['content-type', 'mcp-session-id', 'allow']) {
         const v = upstream.headers.get(h);
         if (v) reply.header(h, v);
+      }
+
+      // Add the number guide to the handshake and the tool list (small replies, so buffer them).
+      const rpcMethod = req.method === 'POST' && !Array.isArray(req.body) ? (req.body as { method?: string } | undefined)?.method : undefined;
+      if (upstream.ok && (rpcMethod === 'initialize' || rpcMethod === 'tools/list')) {
+        const text = await upstream.text();
+        const guide = await numbersGuide();
+        if (!guide) return reply.send(text);
+        return reply.send(editRpc(text, upstream.headers.get('content-type') ?? '', (msg) => {
+          if (!msg.result) return;
+          if (rpcMethod === 'initialize') msg.result.instructions = [msg.result.instructions, guide.instructions].filter(Boolean).join('\n\n');
+          for (const tool of msg.result.tools ?? []) {
+            const session = tool.inputSchema?.properties?.sessionId;
+            if (!session) continue;
+            session.description = `${session.description ?? 'Session UUID'}. ${guide.sessionHint}`;
+            tool.description = `${tool.description ?? ''}\n\n${guide.sessionHint}`.trim();
+          }
+        }));
       }
       return reply.send(upstream.body ? Readable.fromWeb(upstream.body as import('node:stream/web').ReadableStream) : undefined);
     },
