@@ -26,7 +26,7 @@ From your phone on the same Wi-Fi: `http://<your-computer-ip>:3000`. From anywhe
 
 ## Deploy (automatic)
 
-Every push to `main` runs [.github/workflows/deploy.yml](.github/workflows/deploy.yml): type-check + build, then upload to the Google Cloud VM (`wa-sender`, us-central1-a, e2-micro) and restart with `docker-compose.prod.yml` (adds Caddy for HTTPS). Live at https://34-56-155-51.sslip.io.
+Every push to `main` runs [.github/workflows/deploy.yml](.github/workflows/deploy.yml): type-check + build, then upload to the Oracle Cloud Always Free server (`wa-sender`, Mumbai, 4 ARM cores / 24 GB) and restart with `docker-compose.prod.yml` (adds Caddy for HTTPS). Live at https://130-210-23-220.sslip.io.
 
 The server's `/opt/wa-sender/.env` holds the real secrets and is never overwritten by deploys. To change a setting there:
 

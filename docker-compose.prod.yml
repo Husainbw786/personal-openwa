@@ -1,7 +1,7 @@
 # Server overlay: adds HTTPS in front of the app and stops exposing port 3000 directly.
 #   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --no-build
 # The app image is built by GitHub Actions and pulled from GHCR; APP_TAG picks the commit (default latest).
-# Needs DOMAIN in .env (e.g. 34-56-155-51.sslip.io, or your own domain pointing at the server).
+# Needs DOMAIN in .env (e.g. 130-210-23-220.sslip.io, or your own domain pointing at the server).
 
 services:
   wa-app:
@@ -11,7 +11,7 @@ services:
     volumes:
       - ./backups:/app/backups   # hourly backup files; pushed to a private GitHub repo by the server's cron
 
-  # Sized for an e2-standard-4 (16 GB) running 3-4 numbers. On an e2-micro (1 GB) use 700m and
+  # Sized for the 24 GB Oracle server running several numbers. On a 1 GB server use 700m and
   # drop NODE_OPTIONS, or OpenWA runs out of memory.
   openwa:
     mem_limit: 8g

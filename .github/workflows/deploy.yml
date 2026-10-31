@@ -6,7 +6,7 @@
 #   DEPLOY_SSH_KEY      private key of the `deploy` user on the server
 #   DEPLOY_KNOWN_HOSTS  the server's SSH host key line (pins the server, prevents MITM)
 # Variable:
-#   APP_URL             e.g. https://34-56-155-51.sslip.io (used for the health check)
+#   APP_URL             e.g. https://130-210-23-220.sslip.io (used for the health check)
 # The server keeps its own .env (passwords, keys); it is never uploaded from here.
 # The server pulls the image with this run's short-lived GITHUB_TOKEN and logs out right after,
 # so no registry credentials are stored anywhere.
