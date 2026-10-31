@@ -13,6 +13,10 @@ services:
       AUTO_START_SESSIONS: "true"           # reconnect WhatsApp automatically after a restart
       BAILEYS_MARK_ONLINE_ON_CONNECT: "false" # keep notifications working on your phone
       SEND_PACING_ENABLED: "true"           # OpenWA's own safety limits for new numbers / cold messages
+      # OpenWA ramps a number up from 20 sends/day starting the day it was linked, even when the WhatsApp
+      # account is years old. Our numbers are old, and the app's DAILY_CAP and gaps set the real pace.
+      SEND_PACING_WARMUP_SCHEDULE: "1000"
+      SEND_PACING_COLD_DAILY_CAP: "100"
       SSRF_ALLOWED_HOSTS: wa-app            # allow delivery updates to our app on the internal network
       CSP_UPGRADE_INSECURE_REQUESTS: "false"
       # OpenWA's API throttle defaults (10/s, 100/min, 1000/h) starve our background cache and
@@ -26,8 +30,8 @@ services:
       - "127.0.0.1:2785:2785"               # OpenWA's own dashboard, only reachable from this computer
 
   # Same gateway, Chromium engine (whatsapp-web.js): a real WhatsApp Web page per number. Heavier than
-  # Baileys but behaves exactly like WhatsApp Web, incl. "Link with phone number". New numbers go here;
-  # the main number stays on the Baileys gateway above (switching engines means re-linking).
+  # Baileys but behaves exactly like WhatsApp Web, incl. "Link with phone number". All numbers are
+  # linked here now; switching engines means re-linking.
   openwa-web:
     image: ghcr.io/rmyndharis/openwa:${OPENWA_VERSION:-0.24.0}
     restart: unless-stopped
@@ -39,10 +43,12 @@ services:
       API_MASTER_KEY: ${OPENWA_API_KEY}
       AUTO_START_SESSIONS: "true"
       # OpenWA's built-in MCP server at /mcp, so AI agents can use WhatsApp. Agents get their own
-      # revocable API key (scoped to one number); write tools (send, etc.) are on.
+      # revocable API key; write tools (send, etc.) are on.
       MCP_ENABLED: "true"
       MCP_READONLY: "false"
       SEND_PACING_ENABLED: "true"
+      SEND_PACING_WARMUP_SCHEDULE: "1000"   # see the openwa service above
+      SEND_PACING_COLD_DAILY_CAP: "100"
       SSRF_ALLOWED_HOSTS: wa-app
       CSP_UPGRADE_INSECURE_REQUESTS: "false"
       RATE_LIMIT_SHORT_LIMIT: "5000"
