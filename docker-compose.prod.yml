@@ -49,37 +49,30 @@ configs:
   caddyfile:
     content: |
       {$$DOMAIN} {
-        # No OAuth here: answer discovery with a plain 404 instead of the app's HTML.
-        handle /.well-known/* {
-          respond 404
-        }
-        # OpenWA answers GET/HEAD on /mcp with 405 (allowed by the spec), but Gemini's URL check only
-        # sends GET/HEAD and rejects a 405. Answer those with an empty event stream; real MCP is POST.
-        @mcpprobe {
-          path /mcp /mcp/*
-          method GET HEAD
-        }
-        handle @mcpprobe {
-          header Content-Type text/event-stream
-          header Cache-Control no-cache
-          respond ": ok" 200
-        }
-        # OpenWA rejects clients that don't also accept text/event-stream (Gemini, some others).
-        handle /mcp {
-          reverse_proxy openwa-web:2785 {
-            header_up Accept "application/json, text/event-stream"
-          }
-        }
+        # Private no-login link for clients without OAuth or key headers (ChatGPT): adds the agent key.
+        # Some URL checks only send GET/HEAD, which OpenWA answers 405; reply with an empty event stream.
         @mcplink path /mcp/{$$MCP_LINK_SECRET}
         handle @mcplink {
-          rewrite * /mcp
-          reverse_proxy openwa-web:2785 {
-            header_up Authorization "Bearer {$$MCP_AGENT_KEY}"
-            header_up Accept "application/json, text/event-stream"
+          @probe method GET HEAD
+          handle @probe {
+            header Content-Type text/event-stream
+            header Cache-Control no-cache
+            respond ": ok" 200
+          }
+          handle {
+            rewrite * /mcp
+            reverse_proxy openwa-web:2785 {
+              header_up Authorization "Bearer {$$MCP_AGENT_KEY}"
+              header_up Accept "application/json, text/event-stream"
+            }
           }
         }
+        # Everything else goes to the app, incl. /mcp (OAuth sign-in or API key, then on to OpenWA),
+        # /oauth/* and /.well-known/*. flush_interval -1 streams MCP replies as they come.
         handle {
-          reverse_proxy wa-app:3000
+          reverse_proxy wa-app:3000 {
+            flush_interval -1
+          }
         }
       }
 

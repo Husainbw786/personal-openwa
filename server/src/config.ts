@@ -26,6 +26,8 @@ export const config = {
   // Optional second gateway running the Chromium engine (whatsapp-web.js); new numbers are linked there.
   openwaWebUrl: (process.env.OPENWA_WEB_URL ?? '').replace(/\/$/, ''),
   openwaSessionName: process.env.OPENWA_SESSION ?? 'main',
+  // OpenWA API key (operator, main number only) that /mcp uses for agents who signed in with OAuth.
+  mcpAgentKey: process.env.MCP_AGENT_KEY ?? '',
 
   // URL OpenWA uses to reach our webhook receiver. Leave empty to skip delivery/read tracking.
   webhookUrl: process.env.WEBHOOK_URL ?? '',

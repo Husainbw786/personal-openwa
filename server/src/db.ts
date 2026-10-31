@@ -112,6 +112,29 @@ db.exec(`
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
   );
+
+  -- OAuth for AI agents using /mcp. Codes and tokens are stored as SHA-256 hashes.
+  CREATE TABLE IF NOT EXISTS oauth_clients (
+    client_id     TEXT PRIMARY KEY,
+    secret_hash   TEXT,                 -- NULL = public client (PKCE only)
+    name          TEXT,
+    redirect_uris TEXT NOT NULL,        -- JSON array
+    created_at    TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+  CREATE TABLE IF NOT EXISTS oauth_codes (
+    code_hash    TEXT PRIMARY KEY,
+    client_id    TEXT NOT NULL,
+    redirect_uri TEXT NOT NULL,
+    challenge    TEXT NOT NULL,
+    expires_at   INTEGER NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS oauth_tokens (
+    token_hash TEXT PRIMARY KEY,
+    kind       TEXT NOT NULL,          -- access | refresh
+    client_id  TEXT NOT NULL,
+    expires_at INTEGER NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
 `);
 
 // Multi-number: which OpenWA session sends each row, and the number it went out from.

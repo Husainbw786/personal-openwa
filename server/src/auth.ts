@@ -5,7 +5,7 @@ import { config } from './config.ts';
 const COOKIE = 'wa_session';
 const MAX_AGE_SEC = 60 * 60 * 24 * 30; // stay logged in for 30 days
 
-function samePassword(a: string, b: string): boolean {
+export function samePassword(a: string, b: string): boolean {
   // Hash first so the comparison is constant-time regardless of length.
   const ha = createHash('sha256').update(a).digest();
   const hb = createHash('sha256').update(b).digest();

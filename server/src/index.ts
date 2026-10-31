@@ -18,6 +18,7 @@ import { sendRoutes } from './routes/sends.ts';
 import { contactRoutes } from './routes/contacts.ts';
 import { hookRoutes, registerWebhook } from './routes/hooks.ts';
 import { listRoutes } from './routes/lists.ts';
+import { mcpRoutes } from './routes/mcp.ts';
 
 const app = Fastify({ logger: { level: process.env.LOG_LEVEL ?? 'info' }, trustProxy: true });
 
@@ -29,6 +30,11 @@ app.addContentTypeParser('application/json', { parseAs: 'string' }, (req, body, 
   } catch (err) {
     done(err as Error, undefined);
   }
+});
+
+// OAuth forms (the consent page and the token endpoint) post url-encoded bodies.
+app.addContentTypeParser('application/x-www-form-urlencoded', { parseAs: 'string' }, (_req, body, done) => {
+  done(null, Object.fromEntries(new URLSearchParams(body as string)));
 });
 
 await app.register(cookie, { secret: config.cookieSecret });
@@ -61,6 +67,7 @@ sendRoutes(app);
 contactRoutes(app);
 hookRoutes(app);
 listRoutes(app);
+mcpRoutes(app);
 
 app.get('/healthz', async () => ({ ok: true }));
 
