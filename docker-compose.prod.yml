@@ -53,6 +53,17 @@ configs:
         handle /.well-known/* {
           respond 404
         }
+        # OpenWA answers GET/HEAD on /mcp with 405 (allowed by the spec), but Gemini's URL check only
+        # sends GET/HEAD and rejects a 405. Answer those with an empty event stream; real MCP is POST.
+        @mcpprobe {
+          path /mcp /mcp/*
+          method GET HEAD
+        }
+        handle @mcpprobe {
+          header Content-Type text/event-stream
+          header Cache-Control no-cache
+          respond ": ok" 200
+        }
         # OpenWA rejects clients that don't also accept text/event-stream (Gemini, some others).
         handle /mcp {
           reverse_proxy openwa-web:2785 {
