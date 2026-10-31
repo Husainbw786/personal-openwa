@@ -33,6 +33,9 @@ services:
       - openwa-web
     environment:
       DOMAIN: ${DOMAIN}
+      # Private link for MCP clients that can't send a key header (e.g. ChatGPT connectors): /mcp/<secret>
+      MCP_LINK_SECRET: ${MCP_LINK_SECRET:-}
+      MCP_AGENT_KEY: ${MCP_AGENT_KEY:-}
     configs:
       - source: caddyfile
         target: /etc/caddy/Caddyfile
@@ -48,6 +51,13 @@ configs:
       {$$DOMAIN} {
         handle /mcp {
           reverse_proxy openwa-web:2785
+        }
+        @mcplink path /mcp/{$$MCP_LINK_SECRET}
+        handle @mcplink {
+          rewrite * /mcp
+          reverse_proxy openwa-web:2785 {
+            header_up Authorization "Bearer {$$MCP_AGENT_KEY}"
+          }
         }
         handle {
           reverse_proxy wa-app:3000

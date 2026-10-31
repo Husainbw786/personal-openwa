@@ -72,3 +72,5 @@ OpenWA's built-in MCP server is on for the Chromium gateway and served at `https
 Agents authenticate with their own OpenWA API key (`Authorization: Bearer <key>`), created with role `operator`
 and limited to the main number; revoke it in OpenWA (`DELETE /api/auth/api-keys/<id>`) to cut an agent off.
 Sends made through MCP go straight to WhatsApp: they skip this app's pacing, daily cap and "never twice" checks.
+For clients that can't send a key header (ChatGPT connectors), Caddy also serves a private link
+`https://<domain>/mcp/<MCP_LINK_SECRET>` that adds the agent key itself; both values live only in the server's `.env`.
