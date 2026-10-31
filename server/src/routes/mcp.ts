@@ -10,7 +10,7 @@ import { samePassword } from '../auth.ts';
  *
  * Some clients (Gemini) only connect to MCP servers that have an OAuth login, so the app is also a
  * small OAuth 2.1 server: dynamic client registration, authorization code + PKCE (S256), refresh
- * tokens. Signing in means typing the app password. Agents holding one of our access tokens reach
+ * tokens (not rotated). Signing in means typing the app password. Agents holding one of our access tokens reach
  * OpenWA with MCP_AGENT_KEY (operator, main number only). Any other bearer token is passed through
  * untouched, so plain OpenWA API keys keep working.
  */
@@ -226,8 +226,13 @@ export function mcpRoutes(app: FastifyInstance): void {
         | { client_id: string; expires_at: number }
         | undefined;
       if (!row || row.expires_at < now() || row.client_id !== client.client_id) return fail('invalid_grant');
-      db.prepare('DELETE FROM oauth_tokens WHERE token_hash = ?').run(hash); // rotate
-      return reply.header('Cache-Control', 'no-store').send(issueTokens(client.client_id));
+      // Google's connector guide asks not to rotate: return the same refresh token with a later expiry.
+      db.prepare('UPDATE oauth_tokens SET expires_at = ? WHERE token_hash = ?').run(now() + REFRESH_TTL_SEC * 1000, hash);
+      const access = `${TOKEN_PREFIX}${newSecret()}`;
+      db.prepare('INSERT INTO oauth_tokens (token_hash, kind, client_id, expires_at) VALUES (?, ?, ?, ?)')
+        .run(sha256(access), 'access', client.client_id, now() + ACCESS_TTL_SEC * 1000);
+      return reply.header('Cache-Control', 'no-store')
+        .send({ access_token: access, token_type: 'Bearer', expires_in: ACCESS_TTL_SEC, refresh_token: body.refresh_token });
     }
 
     return fail('unsupported_grant_type');
