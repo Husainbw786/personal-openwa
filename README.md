@@ -65,3 +65,10 @@ cd web && npm install && npm run dev        # http://localhost:5173
 | `MAX_BATCH` | 10 | Max people per send |
 
 OpenWA also enforces its own warm-up limits for new numbers and first-time chats (`SEND_PACING_ENABLED`). When it says "slow down", messages simply stay queued and retry later.
+
+## AI agents (MCP)
+
+OpenWA's built-in MCP server is on for the Chromium gateway and served at `https://<domain>/mcp` (Streamable HTTP).
+Agents authenticate with their own OpenWA API key (`Authorization: Bearer <key>`), created with role `operator`
+and limited to the main number; revoke it in OpenWA (`DELETE /api/auth/api-keys/<id>`) to cut an agent off.
+Sends made through MCP go straight to WhatsApp: they skip this app's pacing, daily cap and "never twice" checks.

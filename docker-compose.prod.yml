@@ -21,20 +21,38 @@ services:
   # Chromium: roughly 300-500 MB per linked number.
   openwa-web:
     mem_limit: 4g
+    environment:
+      TRUSTED_PROXIES: 172.16.0.0/12   # Caddy, so MCP rate limits see the agent's real IP
 
+  # HTTPS for the app, plus /mcp for AI agents (OpenWA's MCP server on the Chromium gateway).
   caddy:
     image: caddy:2.10-alpine
     restart: unless-stopped
     depends_on:
       - wa-app
+      - openwa-web
     environment:
       DOMAIN: ${DOMAIN}
-    command: caddy reverse-proxy --from ${DOMAIN} --to wa-app:3000
+    configs:
+      - source: caddyfile
+        target: /etc/caddy/Caddyfile
     ports:
       - "80:80"
       - "443:443"
     volumes:
       - caddy-data:/data
+
+configs:
+  caddyfile:
+    content: |
+      {$$DOMAIN} {
+        handle /mcp {
+          reverse_proxy openwa-web:2785
+        }
+        handle {
+          reverse_proxy wa-app:3000
+        }
+      }
 
 volumes:
   caddy-data:

@@ -38,6 +38,10 @@ services:
       ENGINE_TYPE: whatsapp-web.js
       API_MASTER_KEY: ${OPENWA_API_KEY}
       AUTO_START_SESSIONS: "true"
+      # OpenWA's built-in MCP server at /mcp, so AI agents can use WhatsApp. Agents get their own
+      # revocable API key (scoped to one number); write tools (send, etc.) are on.
+      MCP_ENABLED: "true"
+      MCP_READONLY: "false"
       SEND_PACING_ENABLED: "true"
       SSRF_ALLOWED_HOSTS: wa-app
       CSP_UPGRADE_INSECURE_REQUESTS: "false"
