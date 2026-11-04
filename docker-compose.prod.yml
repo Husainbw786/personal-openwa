@@ -11,16 +11,16 @@ services:
     volumes:
       - ./backups:/app/backups   # hourly backup files; pushed to a private GitHub repo by the server's cron
 
-  # Sized for the 24 GB Oracle server running several numbers. On a 1 GB server use 700m and
-  # drop NODE_OPTIONS, or OpenWA runs out of memory.
+  # Sized for the 12 GB Oracle Always Free server (2 OCPU / 12 GB since Oracle's June 2026 cut).
+  # The Baileys gateway holds no numbers now; on a 1 GB server use 700m and drop NODE_OPTIONS.
   openwa:
-    mem_limit: 8g
+    mem_limit: 1g
     environment:
-      NODE_OPTIONS: --max-old-space-size=6144
+      NODE_OPTIONS: --max-old-space-size=768
 
-  # Chromium: roughly 300-500 MB per linked number.
+  # Chromium: the two linked numbers use about 3.3 GB together.
   openwa-web:
-    mem_limit: 4g
+    mem_limit: 7g
     environment:
       TRUSTED_PROXIES: 172.16.0.0/12   # Caddy, so MCP rate limits see the agent's real IP
 
